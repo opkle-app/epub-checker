@@ -225,7 +225,6 @@ preload TypeScript compile
 - Runtime readiness exists in the backend resolver but does not have a dedicated UI panel yet.
 - Release packaging still needs an `electron-builder` runtime bundling strategy.
 - Sample EPUB fixtures and automated end-to-end QA should be added.
-- Some product metadata still says `Opkle Editor`.
 
 ## 10. Development Rules
 

@@ -273,7 +273,6 @@ npm run start
 - launcher runtime 준비 상태를 보여주는 전용 UI는 아직 없습니다.
 - OS별 runtime을 앱 패키지에 포함하는 electron-builder 설정은 아직 정식 릴리스 단계에서 정리해야 합니다.
 - 테스트용 sample EPUB fixture와 자동화된 end-to-end QA는 더 보강해야 합니다.
-- `productName`은 배포 브랜드인 `Opkle Editor`를 그대로 사용합니다. npm 패키지명(`epub-checker`)과는 별개입니다.
 
 ## Contribution Notes
 
