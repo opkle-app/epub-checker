@@ -13,14 +13,14 @@
 //
 // `codesign --deep` fails on Chromium's bundle layout with
 // "unsealed contents present in the root directory of an embedded framework" —
-// a well-known codesign limitation with non-standard framework subfolders like
-// "Libraries" (see CEF issue #2739, sparkle-project/Sparkle#1471, Qt frameworks
-// forum threads). The documented workaround is to not use --deep at all and
-// instead sign every nested Mach-O/dylib and bundle individually, deepest first,
-// then sign the outer bundle last.
+// a well-known codesign limitation (CEF issue #2739, sparkle-project/Sparkle#1471,
+// Qt frameworks forum threads). Signing bottom-up (loose files, then Helper.app,
+// then the outer app) fixed the Helpers, but Framework.framework itself still hits
+// the same error — something non-symlink sits directly in its root. Logging the
+// framework root listing before signing so the next failure shows exactly what.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readdir, access, stat } from "node:fs/promises";
+import { readdir, access, stat, lstat } from "node:fs/promises";
 import path from "node:path";
 
 const execFileAsync = promisify(execFile);
@@ -70,12 +70,31 @@ async function collectSignTargets(root) {
   return { looseFiles, bundles };
 }
 
-async function findChromiumAppBundles(chromiumDir) {
+async function findTopLevelAppBundles(chromiumDir) {
   const { bundles } = await collectSignTargets(chromiumDir);
-  return bundles.filter((p) => p.endsWith(".app"));
+  const apps = bundles.filter((p) => p.endsWith(".app"));
+  // Drop any bundle that lives inside another bundle in the list (e.g. Helper.app
+  // nested under Google Chrome for Testing.app) — we only want real top-level roots.
+  return apps.filter((candidate) => !apps.some((other) => other !== candidate && candidate.startsWith(other + path.sep)));
+}
+
+async function logFrameworkRoot(frameworkPath) {
+  try {
+    const entries = await readdir(frameworkPath, { withFileTypes: true });
+    console.log(`[afterPackSignChromium] ${frameworkPath} root contents:`);
+    for (const entry of entries) {
+      const full = path.join(frameworkPath, entry.name);
+      const info = await lstat(full);
+      const kind = info.isSymbolicLink() ? "symlink" : entry.isDirectory() ? "dir" : "file";
+      console.log(`  [${kind}] ${entry.name}`);
+    }
+  } catch (err) {
+    console.log(`[afterPackSignChromium] could not list ${frameworkPath}: ${err}`);
+  }
 }
 
 async function signPath(target, identity, entitlements) {
+  console.log(`[afterPackSignChromium]   codesign ${target}`);
   await execFileAsync("codesign", [
     "--force",
     "--options",
@@ -113,7 +132,7 @@ export default async function afterPack(context) {
     return;
   }
 
-  const appBundles = await findChromiumAppBundles(chromiumRoot);
+  const appBundles = await findTopLevelAppBundles(chromiumRoot);
   if (appBundles.length === 0) {
     console.warn(`[afterPackSignChromium] no Chromium .app bundle found under ${chromiumRoot}.`);
     return;
@@ -132,6 +151,9 @@ export default async function afterPack(context) {
     }
     // 2) nested bundles (Helper.app, Framework.framework), deepest first.
     for (const bundle of bundles) {
+      if (bundle.endsWith(".framework")) {
+        await logFrameworkRoot(bundle);
+      }
       await signPath(bundle, identity, entitlements);
     }
     // 3) the Chromium.app bundle itself, last, non-deep — everything inside is
