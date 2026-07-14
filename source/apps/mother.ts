@@ -1,6 +1,7 @@
 import { Unique } from "./classStorage/dictionary.js";
 import path from "path";
 import os from "os";
+import { createRequire } from "module";
 
 const IN_ELECTRON: boolean = typeof (process as any).versions.electron === "string";
 
@@ -8,11 +9,10 @@ const safeElectronApp = (): any | null => {
   if (!IN_ELECTRON) return null;
   try {
     // electron main process에서는 require('electron') 가 실제 app 모듈을 돌려준다.
-    // tsx/cjs/esm 모두 호환되도록 createRequire 사용.
-    const { createRequire } = require("module") as typeof import("module");
-    const localRequire: NodeRequire = createRequire(
-      typeof __filename !== "undefined" ? __filename : (import.meta as any).url,
-    );
+    // dist/main.js는 ESM("type":"module")으로 실행되므로 bare require()는 존재하지
+    // 않는다 (packaged 앱에서 process.cwd()가 "/"로 폴백돼 preload/renderer 경로가
+    // 깨지는 버그의 원인이었음) — createRequire를 정적 import로 가져와야 한다.
+    const localRequire: NodeRequire = createRequire(import.meta.url);
     const electronModule = localRequire("electron");
     return electronModule?.app ?? null;
   } catch {
