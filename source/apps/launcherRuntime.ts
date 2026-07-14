@@ -218,12 +218,29 @@ class LauncherRuntime {
    * Safe to call on every platform: win/linux just short-circuit since their
    * bundled copy already satisfies resolve().
    */
+  // Guards against concurrent callers (background startup download + a user
+  // triggering an Ace check before that finishes) both spawning their own
+  // `playwright install chromium` into the same destination directory at once.
+  private static ensureChromiumInFlight: Promise<LauncherRuntimeInfo> | null = null;
+
   public static ensureChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
     const current = LauncherRuntime.resolve();
     if (!current.missing.includes("chromium")) {
       return current;
     }
 
+    if (LauncherRuntime.ensureChromiumInFlight) {
+      return LauncherRuntime.ensureChromiumInFlight;
+    }
+
+    const task = LauncherRuntime.downloadChromium(onProgress).finally(() => {
+      LauncherRuntime.ensureChromiumInFlight = null;
+    });
+    LauncherRuntime.ensureChromiumInFlight = task;
+    return task;
+  };
+
+  private static downloadChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
     const userDataRoot = LauncherRuntime.getUserDataChromiumRoot();
     const downloadCacheDir = path.join(userDataRoot, "_download-cache");
     mkdirSync(downloadCacheDir, { recursive: true });
