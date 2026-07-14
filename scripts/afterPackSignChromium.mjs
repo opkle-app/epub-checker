@@ -29,6 +29,15 @@ function depth(p) {
   return p.split(path.sep).length;
 }
 
+// An .app bundle's own main executable (Contents/MacOS/<name>) must never be signed
+// as a bare file — codesign checks it against the bundle's linked frameworks and
+// rejects it if those frameworks aren't sealed as bundles yet ("code object is not
+// signed at all... In subcomponent: .../Framework.framework"). It gets signed
+// correctly when the containing .app bundle itself is signed as a unit instead.
+function isBundleMainExecutable(filePath) {
+  return /\.app[\\/]Contents[\\/]MacOS[\\/][^\\/]+$/.test(filePath);
+}
+
 async function collectSignTargets(root) {
   const looseFiles = [];
   const bundles = [];
@@ -53,7 +62,7 @@ async function collectSignTargets(root) {
       try {
         const st = await stat(full);
         const isExecutable = (st.mode & 0o111) !== 0;
-        if (isExecutable || /\.(dylib|so)$/i.test(entry.name)) {
+        if ((isExecutable || /\.(dylib|so)$/i.test(entry.name)) && !isBundleMainExecutable(full)) {
           looseFiles.push(full);
         }
       } catch {
