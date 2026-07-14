@@ -1,0 +1,66 @@
+name: Release
+
+# Push a tag like v0.1.0-beta.2 (matching package.json "version") to trigger a build
+# on every OS/arch and publish the artifacts to a GitHub Release (created as a draft
+# so you can review before publishing it publicly).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-13 (Intel) was retired by GitHub in late 2025.
+          # macos-15-intel is the current Intel label (supported until Aug 2027).
+          - os: macos-15-intel
+            dist: dist:mac
+            args: --x64 --publish always
+          - os: macos-15
+            dist: dist:mac
+            args: --arm64 --publish always
+          - os: ubuntu-latest
+            dist: dist:linux
+            args: --publish always
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Only needed on mac: our afterPack hook (scripts/afterPackSignChromium.mjs)
+      # re-signs the bundled Chromium runtime and needs the identity already present
+      # in an unlocked keychain BEFORE electron-builder runs (it imports CSC_LINK
+      # into its own temp keychain later, too late for our hook to use).
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.CSC_LINK }}
+          p12-password: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - run: npm ci
+
+      - name: Prepare local JRE / EPUBCheck / Chromium runtime
+        run: npm run launcher:setup
+
+      - name: Build and publish
+        run: npm run ${{ matrix.dist }} -- ${{ matrix.args }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
