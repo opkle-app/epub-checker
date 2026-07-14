@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import path from "path";
 import process from "process";
+import { Mother } from "./mother.js";
 
 interface LauncherRuntimeInfo {
   launcherRoot: string;
@@ -19,7 +20,10 @@ class LauncherRuntime {
   /**
    * Local runtime layout expected by EpubChecker.
    *
-   * Put the files under process.cwd() + "/launcher".
+   * In development, files live under the repo root's "launcher" folder
+   * (process.cwd() while running via `npm run dev`/`electron .`).
+   * In a packaged app, the same folder must be shipped as an electron-builder
+   * extraResources entry so it lands under Mother.resourcePath ("launcher").
    * The folder is intentionally gitignored because JRE and Chromium are large binaries.
    *
    * Recommended layout:
@@ -47,7 +51,9 @@ class LauncherRuntime {
    * launcher/common/epubcheck/epubcheck.jar
    */
   public static getLauncherRoot = (): string => {
-    return path.join(process.cwd(), LauncherRuntime.launcherFolderName);
+    // Packaged builds must resolve this via extraResources (Mother.resourcePath),
+    // not process.cwd(), which is unreliable once Electron is packaged.
+    return path.join(Mother.resourcePath, LauncherRuntime.launcherFolderName);
   };
 
   public static getPlatformKey = (): string => {

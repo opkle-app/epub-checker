@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Electron/V8 and the bundled JRE both JIT-compile; hardened runtime blocks this by default. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- The bundled JRE and Chromium runtime under launcher/ are signed by their own
+         vendors (Adoptium, Google), not Opkle's Developer ID, so library validation
+         must stay off or the hardened main process refuses to load anything from them. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- EPUBCheck/Ace/Chromium network calls stay local, but Electron itself still
+         needs client networking for things like update checks. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+  </dict>
+</plist>

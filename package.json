@@ -21,7 +21,11 @@
     "launcher:setup:mac:arm64": "cross-env LAUNCHER_PLATFORM=darwin-arm64 node scripts/setup-launcher.mjs",
     "launcher:setup:win:x64": "cross-env LAUNCHER_PLATFORM=win32-x64 node scripts/setup-launcher.mjs",
     "format": "prettier --write \"source/**/*.ts\" \"scripts/**/*.mjs\"",
-    "format:check": "prettier --check \"source/**/*.ts\" \"scripts/**/*.mjs\""
+    "format:check": "prettier --check \"source/**/*.ts\" \"scripts/**/*.mjs\"",
+    "dist": "npm run build:all && electron-builder",
+    "dist:mac": "npm run build:all && electron-builder --mac",
+    "dist:win": "npm run build:all && electron-builder --win",
+    "dist:linux": "npm run build:all && electron-builder --linux"
   },
   "keywords": [
     "epub",
@@ -73,5 +77,54 @@
     "prettier": "^3.5.3",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "app.opkle.epubchecker",
+    "productName": "EpubChecker",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "afterPack": "scripts/afterPackSignChromium.mjs",
+    "files": ["dist/**/*", "renderer/**/*", "package.json"],
+    "asar": true,
+    "publish": {
+      "provider": "github",
+      "owner": "opkle-app",
+      "repo": "epub-checker"
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "extraResources": [
+        { "from": "launcher/darwin-${arch}", "to": "launcher/darwin-${arch}", "filter": ["**/*"] }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["nsis"],
+      "extraResources": [
+        { "from": "launcher/win32-${arch}", "to": "launcher/win32-${arch}", "filter": ["**/*"] }
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage"],
+      "extraResources": [
+        { "from": "launcher/linux-${arch}", "to": "launcher/linux-${arch}", "filter": ["**/*"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
