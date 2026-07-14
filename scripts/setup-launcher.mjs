@@ -128,7 +128,13 @@ async function fetchToFile(url, dest) {
 function extractArchive(archivePath, destDir) {
   if (existsSync(destDir)) rmSync(destDir, { recursive: true, force: true });
   mkdirSync(destDir, { recursive: true });
-  // `tar`(libarchive 기반)은 mac/linux/modern-win 모두 .zip과 .tar.gz 둘 다 풀 수 있음.
+  // mac(bsdtar)/modern win(bsdtar)의 `tar`는 libarchive 기반이라 .zip도 풀리지만,
+  // 우분투 기본 `tar`는 GNU tar라 .zip을 아예 못 품 → EPUBCheck(.zip)는 unzip으로 처리.
+  if (/\.zip$/i.test(archivePath) && HOST_PLATFORM === "linux") {
+    const r = spawnSync("unzip", ["-q", "-o", archivePath, "-d", destDir], { stdio: "inherit" });
+    if (r.status !== 0) throw new Error(`unzip failed: exit ${r.status}`);
+    return;
+  }
   const r = spawnSync("tar", ["-xf", archivePath, "-C", destDir], { stdio: "inherit" });
   if (r.status !== 0) throw new Error(`tar failed: exit ${r.status}`);
 }
