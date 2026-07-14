@@ -111,6 +111,24 @@ function firstExisting(candidates) {
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
+function ensureOwnerWritable(root) {
+  const entries = readdirSync(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      ensureOwnerWritable(full);
+      continue;
+    }
+    try {
+      const mode = statSync(full).mode;
+      chmodSync(full, mode | 0o200);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function fetchToFile(url, dest) {
   log("↓", url);
   // GitHub (API 및 release asset redirect 대상 모두)는 User-Agent 없는 요청을
@@ -233,6 +251,12 @@ async function setupJre() {
   mkdirSync(destJre, { recursive: true });
   // copySync로 destJre 안의 bin/lib/... 채우기
   cpSync(sourceForJre, destJre, { recursive: true });
+
+  // Adoptium tarball은 일부 파일(예: lib/server/classes.jsa)을 owner-write 없이
+  // 배포함. 나중에 electron-builder가 mac 서명 시 Resources 트리 전체를 훑으며
+  // 이런 파일에도 서명을 쓰려다가 "Permission denied"로 실패하므로 전부 owner-write
+  // 가능하게 맞춰둠 (기존 실행 권한은 그대로 유지, write 비트만 추가).
+  ensureOwnerWritable(destJre);
 
   // exec bit 보장
   const javaExe =
