@@ -73,7 +73,11 @@ class Mother {
   }
 
   public static get assetPath(): string {
-    return path.join(Mother.resourcePath, "./renderer");
+    // renderer/**/* is packed into app.asar (electron-builder "files" + asar:true),
+    // so it lives under the asar root (Mother.appPath), not plain Resources/
+    // (Mother.resourcePath — that one is for extraResources like launcher/,
+    // which electron-builder always keeps outside app.asar).
+    return path.join(Mother.appPath, "./renderer");
   }
 
   public static get userDataPath(): string {
