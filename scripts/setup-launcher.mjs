@@ -113,7 +113,9 @@ function firstExisting(candidates) {
 
 async function fetchToFile(url, dest) {
   log("↓", url);
-  const res = await fetch(url, { redirect: "follow" });
+  // GitHub (API 및 release asset redirect 대상 모두)는 User-Agent 없는 요청을
+  // 봇으로 간주해 403을 돌려주는 경우가 있음.
+  const res = await fetch(url, { redirect: "follow", headers: { "user-agent": "epub-checker-launcher-setup" } });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status} for ${url}\n${text.slice(0, 200)}`);
@@ -249,8 +251,15 @@ async function setupEpubCheck() {
   }
 
   log("W3C EPUBCheck latest stable jar 받기");
+  // 인증 없이 호출하면 시간당 60회 제한이라 CI 러너 공유 IP에서 쉽게 403(rate limit)이 남.
+  // GITHUB_TOKEN/GH_TOKEN이 있으면 실어서 시간당 5000회 한도로 호출.
+  const githubToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   const apiRes = await fetch("https://api.github.com/repos/w3c/epubcheck/releases/latest", {
-    headers: { accept: "application/vnd.github+json" },
+    headers: {
+      accept: "application/vnd.github+json",
+      "user-agent": "epub-checker-launcher-setup",
+      ...(githubToken ? { authorization: `Bearer ${githubToken}` } : {}),
+    },
   });
   if (!apiRes.ok) throw new Error(`GitHub API HTTP ${apiRes.status}`);
   const release = await apiRes.json();

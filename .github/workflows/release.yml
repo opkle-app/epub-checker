@@ -53,6 +53,10 @@ jobs:
 
       - name: Prepare local JRE / EPUBCheck / Chromium runtime
         run: npm run launcher:setup
+        env:
+          # Avoids GitHub API 403s (unauthenticated rate limit) when fetching the
+          # latest EPUBCheck release info from a shared Actions runner IP.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish
         run: npm run ${{ matrix.dist }} -- ${{ matrix.args }}
