@@ -1,4 +1,6 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync, mkdirSync, rmSync, cpSync } from "fs";
+import { spawn } from "child_process";
+import { createRequire } from "module";
 import path from "path";
 import process from "process";
 import { Mother } from "./mother.js";
@@ -26,17 +28,22 @@ class LauncherRuntime {
    * extraResources entry so it lands under Mother.resourcePath ("launcher").
    * The folder is intentionally gitignored because JRE and Chromium are large binaries.
    *
+   * mac does NOT bundle Chromium this way — Apple notarization rejects Playwright's
+   * "Chrome for Testing" bundle structure (Versions/X/Libraries and Helpers aren't
+   * recognized framework subdirectories, and re-signing it broke in ways that risked
+   * the app's own signature). Instead Chromium is downloaded on demand into
+   * Mother.userDataPath, outside the signed/notarized .app entirely. See
+   * ensureChromium() below and getUserDataChromiumRoot().
+   *
    * Recommended layout:
    *
    * launcher/
    *   darwin-arm64/
    *     jre/bin/java
    *     epubcheck/epubcheck.jar
-   *     chromium/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
    *   darwin-x64/
    *     jre/bin/java
    *     epubcheck/epubcheck.jar
-   *     chromium/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing
    *   win32-x64/
    *     jre/bin/java.exe
    *     epubcheck/epubcheck.jar
@@ -60,8 +67,36 @@ class LauncherRuntime {
     return `${process.platform}-${process.arch}`;
   };
 
+  public static getUserDataChromiumRoot = (): string => {
+    return path.join(Mother.userDataPath, "chromium-runtime");
+  };
+
   private static firstExisting = (candidates: string[], fallback: string): string => {
     return candidates.find((candidate) => existsSync(candidate)) ?? fallback;
+  };
+
+  // Playwright has renamed its Chromium folder over time
+  // (chrome-mac, chrome-mac-x64, chrome-mac-arm64, chrome-win, chrome-linux).
+  // Generates every known variant under a given "chromium/" root so the same
+  // candidate list can check the bundled launcher root, the common/ fallback,
+  // and the userData download location.
+  private static chromiumCandidatesUnder = (chromiumRoot: string): string[] => {
+    return [
+      path.join(chromiumRoot, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(chromiumRoot, "chrome-mac-arm64", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      path.join(chromiumRoot, "chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(chromiumRoot, "chrome-mac-x64", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      path.join(chromiumRoot, "chrome-mac", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(chromiumRoot, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      path.join(chromiumRoot, "Chromium.app", "Contents", "MacOS", "Chromium"),
+      // Windows
+      path.join(chromiumRoot, "chrome-win-x64", "chrome.exe"),
+      path.join(chromiumRoot, "chrome-win", "chrome.exe"),
+      // Linux
+      path.join(chromiumRoot, "chrome-linux-x64", "chrome"),
+      path.join(chromiumRoot, "chrome-linux", "chrome"),
+      path.join(chromiumRoot, "chromium"),
+    ];
   };
 
   public static resolve = (): LauncherRuntimeInfo => {
@@ -69,6 +104,7 @@ class LauncherRuntime {
     const platformKey = LauncherRuntime.getPlatformKey();
     const platformRoot = path.join(launcherRoot, platformKey);
     const commonRoot = path.join(launcherRoot, "common");
+    const userDataChromiumRoot = path.join(LauncherRuntime.getUserDataChromiumRoot(), "chromium");
 
     // Runtime archives differ slightly by OS and vendor version. The resolver
     // accepts both the flat jre/bin/java layout produced by setup-launcher and
@@ -94,90 +130,21 @@ class LauncherRuntime {
       path.join(platformRoot, "epubcheck", "epubcheck.jar"),
     );
 
-    // Playwright has changed Chromium folder names over time
-    // (chrome-mac, chrome-mac-x64, chrome-mac-arm64). Keep candidates broad so
-    // older launcher folders and freshly downloaded runtimes both work.
+    // Checked in this order: a previously downloaded userData copy (mac's only
+    // source, but harmless to check everywhere), then the bundled launcher root
+    // (win/linux still ship Chromium this way), then the shared common/ fallback.
     const chromiumExecutablePath = LauncherRuntime.firstExisting(
       [
-        // macOS — v1228+ 부터 chrome-mac-x64/chrome-mac-arm64, 구 버전은 chrome-mac
-        path.join(
-          platformRoot,
-          "chromium",
-          "chrome-mac-arm64",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(platformRoot, "chromium", "chrome-mac-arm64", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        path.join(
-          platformRoot,
-          "chromium",
-          "chrome-mac-x64",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(platformRoot, "chromium", "chrome-mac-x64", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        path.join(
-          platformRoot,
-          "chromium",
-          "chrome-mac",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(platformRoot, "chromium", "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        path.join(platformRoot, "chromium", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        // Windows
-        path.join(platformRoot, "chromium", "chrome-win-x64", "chrome.exe"),
-        path.join(platformRoot, "chromium", "chrome-win", "chrome.exe"),
-        // Linux
-        path.join(platformRoot, "chromium", "chrome-linux-x64", "chrome"),
-        path.join(platformRoot, "chromium", "chrome-linux", "chrome"),
-        path.join(platformRoot, "chromium", "chromium"),
-        // common/ fallback
-        path.join(
-          commonRoot,
-          "chromium",
-          "chrome-mac-arm64",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(commonRoot, "chromium", "chrome-mac-arm64", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        path.join(
-          commonRoot,
-          "chromium",
-          "chrome-mac-x64",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(
-          commonRoot,
-          "chromium",
-          "chrome-mac",
-          "Google Chrome for Testing.app",
-          "Contents",
-          "MacOS",
-          "Google Chrome for Testing",
-        ),
-        path.join(commonRoot, "chromium", "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
-        path.join(commonRoot, "chromium", "chrome-win-x64", "chrome.exe"),
-        path.join(commonRoot, "chromium", "chrome-win", "chrome.exe"),
-        path.join(commonRoot, "chromium", "chrome-linux-x64", "chrome"),
-        path.join(commonRoot, "chromium", "chrome-linux", "chrome"),
+        ...LauncherRuntime.chromiumCandidatesUnder(userDataChromiumRoot),
+        ...LauncherRuntime.chromiumCandidatesUnder(path.join(platformRoot, "chromium")),
+        ...LauncherRuntime.chromiumCandidatesUnder(path.join(commonRoot, "chromium")),
       ],
       path.join(platformRoot, "chromium"),
     );
 
     const playwrightBrowsersPath = LauncherRuntime.firstExisting(
       [
+        userDataChromiumRoot,
         path.join(platformRoot, "playwright"),
         path.join(platformRoot, "chromium"),
         path.join(commonRoot, "playwright"),
@@ -224,6 +191,72 @@ class LauncherRuntime {
     process.env.PATH = `${javaBinFolder}${delimiter}${process.env.PATH ?? ""}`;
 
     return runtime;
+  };
+
+  private static installPlaywrightChromium = async (browsersPath: string): Promise<void> => {
+    const require = createRequire(import.meta.url);
+    const cliPath = require.resolve("playwright/cli.js");
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [cliPath, "install", "chromium"], {
+        // process.execPath is the Electron binary in a packaged app; ELECTRON_RUN_AS_NODE
+        // makes it behave as a plain Node runtime for this one child process instead of
+        // trying to launch another Electron GUI instance.
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PLAYWRIGHT_BROWSERS_PATH: browsersPath },
+        stdio: "inherit",
+      });
+      child.on("error", reject);
+      child.on("exit", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`playwright install chromium exited with code ${code}`));
+      });
+    });
+  };
+
+  /**
+   * Downloads Chromium into Mother.userDataPath on demand (mac has no bundled
+   * copy — see the class doc comment above). No-op if Chromium already resolves.
+   * Safe to call on every platform: win/linux just short-circuit since their
+   * bundled copy already satisfies resolve().
+   */
+  public static ensureChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
+    const current = LauncherRuntime.resolve();
+    if (!current.missing.includes("chromium")) {
+      return current;
+    }
+
+    const userDataRoot = LauncherRuntime.getUserDataChromiumRoot();
+    const downloadCacheDir = path.join(userDataRoot, "_download-cache");
+    mkdirSync(downloadCacheDir, { recursive: true });
+
+    onProgress?.("Downloading local Chromium runtime for accessibility checks...");
+    await LauncherRuntime.installPlaywrightChromium(downloadCacheDir);
+
+    const versionDirs = readdirSync(downloadCacheDir).filter(
+      (name) => name.startsWith("chromium-") && !name.includes("headless_shell"),
+    );
+    if (versionDirs.length === 0) {
+      throw new Error(`playwright install produced no chromium-* folder under ${downloadCacheDir}`);
+    }
+    const versionDir = path.join(downloadCacheDir, versionDirs.sort().at(-1) as string);
+
+    const platformPrefix =
+      process.platform === "darwin" ? "chrome-mac" : process.platform === "win32" ? "chrome-win" : "chrome-linux";
+    const matching = readdirSync(versionDir).filter((name) => name.startsWith(platformPrefix));
+    if (matching.length === 0) {
+      throw new Error(`no ${platformPrefix}* folder found under ${versionDir}`);
+    }
+    const archSpecific = `${platformPrefix}-${process.arch}`;
+    const chosen = matching.includes(archSpecific) ? archSpecific : matching.sort((a, b) => b.length - a.length)[0];
+
+    const destRoot = path.join(userDataRoot, "chromium");
+    const destDir = path.join(destRoot, chosen);
+    rmSync(destDir, { recursive: true, force: true });
+    mkdirSync(destRoot, { recursive: true });
+    cpSync(path.join(versionDir, chosen), destDir, { recursive: true });
+    rmSync(downloadCacheDir, { recursive: true, force: true });
+
+    onProgress?.("Chromium runtime ready.");
+    return LauncherRuntime.resolve();
   };
 }
 

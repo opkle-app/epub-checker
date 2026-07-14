@@ -76,6 +76,18 @@ class Mother {
     return path.join(Mother.resourcePath, "./renderer");
   }
 
+  public static get userDataPath(): string {
+    const a = safeElectronApp();
+    if (a) {
+      try {
+        return a.getPath("userData");
+      } catch {
+        /* fallthrough */
+      }
+    }
+    return path.join(fallbackTemp(), "epubChecker", "userData");
+  }
+
   public static readonly abstractTempFolderName: string = "abstract_cloud_temp_folder";
 
   public static get tempFolder(): string {

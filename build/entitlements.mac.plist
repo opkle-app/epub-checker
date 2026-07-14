@@ -10,14 +10,16 @@
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
 
-    <!-- The bundled JRE and Chromium runtime under launcher/ are signed by their own
-         vendors (Adoptium, Google), not Opkle's Developer ID, so library validation
-         must stay off or the hardened main process refuses to load anything from them. -->
+    <!-- The bundled JRE under launcher/ is signed by Eclipse Foundation, not Opkle's
+         Developer ID, so library validation must stay off or the hardened main
+         process refuses to load/spawn it. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
-    <!-- EPUBCheck/Ace/Chromium network calls stay local, but Electron itself still
-         needs client networking for things like update checks. -->
+    <!-- Chromium isn't bundled on mac (Apple notarization rejects Playwright's Chrome
+         for Testing bundle layout — see source/apps/launcherRuntime.ts); it's downloaded
+         into userData on first run instead, so the app needs outbound network access
+         for that alone, on top of Electron's own update-check traffic. -->
     <key>com.apple.security.network.client</key>
     <true/>
   </dict>

@@ -157,10 +157,21 @@ npm run check
 |---|---|---|
 | `Missing local runtime: java` | JRE missing or wrong layout | Confirm `jre/bin/java` or `jre/Contents/Home/bin/java` exists |
 | `Missing local runtime: epubcheck` | EPUBCheck jar missing | Confirm `epubcheck/epubcheck.jar` exists |
-| `Missing local runtime: chromium` | Chromium missing | Run setup on the target OS, or inspect with Ace disabled |
+| `Missing local runtime: chromium` | Chromium missing | On mac, wait for the background download into userData to finish, or check network access; on other platforms, run setup on the target OS, or inspect with Ace disabled |
 | `ClassNotFoundException` from EPUBCheck | `lib/` dependencies missing | Copy the full EPUBCheck `lib/` folder |
 | macOS quarantine warning | Downloaded unsigned binary | Remove quarantine with `xattr -dr com.apple.quarantine launcher/darwin-*` |
 
 ## Packaging Note
 
 For an end-user release, bundle the appropriate runtime files with Electron using `electron-builder` resources such as `extraResources` or `asarUnpack`. During development, this setup script keeps large platform binaries out of git while still making validation reproducible.
+
+**mac is the exception**: Chromium is never bundled into the mac app. Apple's notarization
+scan rejects Playwright's "Chrome for Testing" bundle as shipped — `Versions/<ver>/Libraries`
+and `Versions/<ver>/Helpers` aren't recognized framework subdirectories, and re-signing them
+still fails with `codesign: unsealed contents present in the root directory of an embedded
+framework`. Instead, `LauncherRuntime.ensureChromium()` (`source/apps/launcherRuntime.ts`)
+downloads Chromium into `app.getPath('userData')` outside the signed `.app` entirely, in the
+background at startup and on demand before the first Ace check. The bundled JRE is unaffected
+— it's validly signed by Eclipse Foundation already (`codesign -dv --verbose=4` confirms a
+Developer ID signature with a secure timestamp) and ships inside the app as before. Windows
+and Linux builds are unaffected too and continue to bundle Chromium via `extraResources`.

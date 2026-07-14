@@ -299,6 +299,17 @@ class EpubChecker {
 
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
       const includeAce = payload?.includeAce ?? true;
+      // mac downloads Chromium into userData in the background at startup; wait
+      // for it here if the user ran an Ace check before that finished.
+      if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
+        try {
+          this.launcherRuntime = await LauncherRuntime.ensureChromium((message) =>
+            console.log(`[LauncherRuntime] ${message}`),
+          );
+        } catch (err) {
+          console.log("[LauncherRuntime] on-demand Chromium download failed:", err);
+        }
+      }
       // EPUBCheck needs Java and the jar. Ace additionally needs Chromium.
       // Checking here gives the renderer a clear actionable error before a
       // long validation process starts.
@@ -378,6 +389,15 @@ class EpubChecker {
     ipcMain.handle("workspace:inspect", async (_event, payload: EpubWorkspaceInspectPayload) => {
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
       const includeAce = payload?.includeAce ?? true;
+      if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
+        try {
+          this.launcherRuntime = await LauncherRuntime.ensureChromium((message) =>
+            console.log(`[LauncherRuntime] ${message}`),
+          );
+        } catch (err) {
+          console.log("[LauncherRuntime] on-demand Chromium download failed:", err);
+        }
+      }
       // Workspace inspection always validates an exported temporary EPUB, not
       // the original source file. Renderer auto-save is flushed before this IPC
       // call so the exported zip contains the latest editor content.
@@ -511,6 +531,12 @@ class EpubChecker {
     });
 
     this.launcherRuntime = LauncherRuntime.applyToEnvironment();
+    // mac doesn't bundle Chromium (Apple notarization rejects Playwright's Chrome for
+    // Testing bundle layout) — download it into userData in the background so it's
+    // likely ready by the time the user first runs an accessibility check.
+    LauncherRuntime.ensureChromium((message) => console.log(`[LauncherRuntime] ${message}`)).catch((err) =>
+      console.log("[LauncherRuntime] background Chromium download failed:", err),
+    );
 
     this.createWindow();
     this.setAppEvents();

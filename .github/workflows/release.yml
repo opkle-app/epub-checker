@@ -38,25 +38,18 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Only needed on mac: our afterPack hook (scripts/afterPackSignChromium.mjs)
-      # re-signs the bundled Chromium runtime and needs the identity already present
-      # in an unlocked keychain BEFORE electron-builder runs (it imports CSC_LINK
-      # into its own temp keychain later, too late for our hook to use).
-      - name: Import macOS signing certificate
-        if: runner.os == 'macOS'
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.CSC_LINK }}
-          p12-password: ${{ secrets.CSC_KEY_PASSWORD }}
-
       - run: npm ci
 
-      - name: Prepare local JRE / EPUBCheck / Chromium runtime
+      - name: Prepare local JRE / EPUBCheck runtime
         run: npm run launcher:setup
         env:
           # Avoids GitHub API 403s (unauthenticated rate limit) when fetching the
           # latest EPUBCheck release info from a shared Actions runner IP.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # mac doesn't bundle Chromium at all (see source/apps/launcherRuntime.ts —
+          # Apple notarization rejects Playwright's Chrome for Testing bundle layout;
+          # it's downloaded into userData on first run instead), so skip it here too.
+          SKIP_CHROMIUM: ${{ runner.os == 'macOS' && '1' || '' }}
 
       - name: Build and publish
         run: npm run ${{ matrix.dist }} -- ${{ matrix.args }}
@@ -64,7 +57,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          CSC_NAME: ${{ secrets.CSC_NAME }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

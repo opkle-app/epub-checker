@@ -85,7 +85,6 @@
       "output": "release",
       "buildResources": "build"
     },
-    "afterPack": "scripts/afterPackSignChromium.mjs",
     "files": ["dist/**/*", "renderer/**/*", "package.json"],
     "asar": true,
     "publish": {
@@ -105,7 +104,7 @@
         { "target": "zip", "arch": ["x64", "arm64"] }
       ],
       "extraResources": [
-        { "from": "launcher/darwin-${arch}", "to": "launcher/darwin-${arch}", "filter": ["**/*"] }
+        { "from": "launcher/darwin-${arch}", "to": "launcher/darwin-${arch}", "filter": ["**/*", "!chromium/**"] }
       ]
     },
     "win": {
