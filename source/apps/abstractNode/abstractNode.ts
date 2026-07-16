@@ -8,6 +8,9 @@ import fsPromise from "fs/promises";
 import path from "path";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
 
 type AbstractNodeMode = "build" | "watch";
 
@@ -111,11 +114,22 @@ export default {
   };
 
   public runRspack = async (mode: AbstractNodeMode): Promise<void> => {
-    const command = process.platform === "win32" ? "npx.cmd" : "npx";
-    const args = ["rspack", mode === "watch" ? "watch" : "build", "--config", this.rspackConfigPath];
+    // Resolve rspack's actual JS entry point and run it via `node` directly
+    // rather than shelling out to `npx`/`npx.cmd`. Spawning `.cmd` shims
+    // without `shell: true` throws `spawn EINVAL` on Windows (Node.js
+    // enforces this since the child_process security fix in 18.20.2/20.12.2),
+    // and invoking `node <script.js>` sidesteps the shim entirely on every OS.
+    // "@rspack/cli"'s package.json "exports" map only exposes "." and
+    // "./package.json" — resolving "./bin/rspack.js" directly throws
+    // ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the (exported) package.json
+    // instead and derive the bin path from its own "bin" field.
+    const rspackPkgPath = require.resolve("@rspack/cli/package.json", { paths: [this.rootFolder] });
+    const rspackPkg = require(rspackPkgPath) as { bin?: Record<string, string> };
+    const rspackBin = path.join(path.dirname(rspackPkgPath), rspackPkg.bin?.rspack ?? "bin/rspack.js");
+    const args = [rspackBin, mode === "watch" ? "watch" : "build", "--config", this.rspackConfigPath];
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
+      const child = spawn(process.execPath, args, {
         cwd: this.rootFolder,
         env: process.env,
         stdio: "inherit",
