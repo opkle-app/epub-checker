@@ -195,7 +195,13 @@ class LauncherRuntime {
 
   private static installPlaywrightChromium = async (browsersPath: string): Promise<void> => {
     const require = createRequire(import.meta.url);
-    const cliPath = require.resolve("playwright/cli.js");
+    // playwright's package.json "exports" map doesn't expose "./cli.js"
+    // directly (only "." and a handful of "./lib/*" subpaths), so resolving
+    // it throws ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve the (exported)
+    // package.json instead and derive the cli path from its "bin" field.
+    const playwrightPkgPath = require.resolve("playwright/package.json");
+    const playwrightPkg = require(playwrightPkgPath) as { bin?: Record<string, string> };
+    const cliPath = path.join(path.dirname(playwrightPkgPath), playwrightPkg.bin?.playwright ?? "cli.js");
     console.log(`[LauncherRuntime] playwright install chromium starting (browsersPath=${browsersPath})`);
     console.log(
       '[LauncherRuntime] Playwright may print "Downloading Electron binary..." — that is Chromium for Ace, not the Electron app itself.',
