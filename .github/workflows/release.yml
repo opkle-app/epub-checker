@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0-beta.2 (matching package.json "version") to trigger a build
+# Push a tag like v0.2.0 (matching package.json "version") to trigger a build
 # on every OS/arch and publish the artifacts to a GitHub Release (created as a draft
 # so you can review before publishing it publicly).
 on:

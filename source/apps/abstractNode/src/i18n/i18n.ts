@@ -8,13 +8,11 @@ const catalogs: Record<AppLocale, Messages> = { ko, en };
 const isAppLocale = (value: unknown): value is AppLocale => value === "ko" || value === "en";
 
 const selectSupportedLocale = (preferredLanguages: string[]): AppLocale => {
-  for (const tag of preferredLanguages) {
-    const language = String(tag).trim().toLowerCase().split("-")[0];
-    if (isAppLocale(language)) {
-      return language;
-    }
-  }
-  return "en";
+  const primaryLanguage = String(preferredLanguages[0] ?? "")
+    .trim()
+    .toLowerCase()
+    .split("-")[0];
+  return primaryLanguage === "ko" ? "ko" : "en";
 };
 
 const message = (key: keyof Messages, params?: MessageParams): LocalizedMessage => ({ key, params });

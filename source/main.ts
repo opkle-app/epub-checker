@@ -82,13 +82,11 @@ interface EpubRuntimeStatus {
 }
 
 const selectSupportedLocale = (preferredLanguages: string[]): AppLocale => {
-  for (const tag of preferredLanguages) {
-    const language = String(tag).trim().toLowerCase().split("-")[0];
-    if (language === "ko" || language === "en") {
-      return language;
-    }
-  }
-  return "en";
+  const primaryLanguage = String(preferredLanguages[0] ?? "")
+    .trim()
+    .toLowerCase()
+    .split("-")[0];
+  return primaryLanguage === "ko" ? "ko" : "en";
 };
 
 const mainMessages: Record<

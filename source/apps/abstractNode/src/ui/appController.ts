@@ -122,7 +122,12 @@ class AppController {
                   mode: "button",
                   class: ["locale-button", this.i18n.current === "ko" ? "active" : ""].filter(Boolean),
                   text: "KO",
-                  attribute: { type: "button", title: messages.switchToKorean, "aria-label": messages.switchToKorean },
+                  attribute: {
+                    type: "button",
+                    title: messages.switchToKorean,
+                    "aria-label": messages.switchToKorean,
+                    "aria-pressed": String(this.i18n.current === "ko"),
+                  },
                   event: { click: () => this.setLocale("ko") },
                 },
                 {
@@ -133,6 +138,7 @@ class AppController {
                     type: "button",
                     title: messages.switchToEnglish,
                     "aria-label": messages.switchToEnglish,
+                    "aria-pressed": String(this.i18n.current === "en"),
                   },
                   event: { click: () => this.setLocale("en") },
                 },
@@ -822,7 +828,12 @@ class AppController {
 
       .locale-button.active {
         color: #ffffff;
-        background: var(--accent-deep);
+        background: var(--accent);
+      }
+
+      .locale-button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
       }
 
       .window-button {

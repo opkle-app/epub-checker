@@ -10,6 +10,7 @@ import { localizeIssue } from "../source/apps/abstractNode/src/i18n/issueLocaliz
 
 assert.equal(selectSupportedLocale(["ko-KR", "en-US"]), "ko");
 assert.equal(selectSupportedLocale(["ja-JP", "en-GB", "ko-KR"]), "en");
+assert.equal(selectSupportedLocale(["ja-JP", "ko-KR"]), "en");
 assert.equal(selectSupportedLocale(["fr-FR", "ja-JP"]), "en");
 
 const values = new Map<string, string>([[LOCALE_STORAGE_KEY, "ko"]]);

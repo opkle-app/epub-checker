@@ -1,6 +1,6 @@
 {
   "name": "epub-checker",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Opkle이 만든 무료 로컬 EPUB 검사·편집 도구",
   "main": "dist/main.js",
   "type": "module",
