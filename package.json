@@ -124,10 +124,10 @@
     "appx": {
       "applicationId": "EpubChecker",
       "backgroundColor": "#0B0B0C",
-      "displayName": "EpubChecker",
-      "identityName": "REPLACE_WITH_PARTNER_CENTER_IDENTITY_NAME",
-      "publisher": "REPLACE_WITH_PARTNER_CENTER_PUBLISHER_CN",
-      "publisherDisplayName": "Opkle"
+      "displayName": "Epub checker",
+      "identityName": "AbstractCloud.Epubchecker",
+      "publisher": "CN=269F0B9D-A7F4-4A72-9179-695E7C7524B5",
+      "publisherDisplayName": "Abstract Cloud"
     },
     "linux": {
       "icon": "build/icon.png",
