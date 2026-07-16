@@ -1,6 +1,6 @@
 {
   "name": "epub-checker",
-  "version": "0.1.3-beta.1",
+  "version": "0.1.3",
   "description": "Opkle이 만든 무료 로컬 EPUB 검사·편집 도구",
   "main": "dist/main.js",
   "type": "module",
@@ -92,7 +92,11 @@
       "output": "release",
       "buildResources": "build"
     },
-    "files": ["dist/**/*", "renderer/**/*", "package.json"],
+    "files": [
+      "dist/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
     "asar": true,
     "publish": {
       "provider": "github",
@@ -107,18 +111,45 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "extraResources": [
-        { "from": "launcher/darwin-${arch}", "to": "launcher/darwin-${arch}", "filter": ["**/*", "!chromium/**"] }
+        {
+          "from": "launcher/darwin-${arch}",
+          "to": "launcher/darwin-${arch}",
+          "filter": [
+            "**/*",
+            "!chromium/**"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "extraResources": [
-        { "from": "launcher/win32-${arch}", "to": "launcher/win32-${arch}", "filter": ["**/*"] }
+        {
+          "from": "launcher/win32-${arch}",
+          "to": "launcher/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "appx": {
@@ -131,9 +162,17 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "extraResources": [
-        { "from": "launcher/linux-${arch}", "to": "launcher/linux-${arch}", "filter": ["**/*"] }
+        {
+          "from": "launcher/linux-${arch}",
+          "to": "launcher/linux-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "nsis": {
