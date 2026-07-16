@@ -3,7 +3,7 @@
 // main process directly, so these types are kept in sync by hand. If an IPC
 // payload shape changes in main.ts/preload.ts, update the matching type here.
 
-type InspectionStage = "idle" | "opening" | "ready" | "inspecting" | "editing" | "exported" | "error";
+type InspectionStage = "idle" | "opening" | "ready" | "inspecting" | "editing" | "validated" | "exported" | "error";
 
 type EpubEditableKind = "xhtml" | "html" | "xml" | "css" | "opf" | "ncx" | "txt";
 
@@ -23,6 +23,7 @@ interface EpubInspectError {
 interface EpubInspectResult {
   status: "success" | "error";
   errors: EpubInspectError[];
+  logs: string[];
 }
 
 interface EpubWorkspaceFile {
@@ -37,6 +38,7 @@ interface EpubWorkspaceOpenResult {
   sourcePath: string;
   fileName: string;
   files: EpubWorkspaceFile[];
+  revision: number;
 }
 
 interface EpubWorkspaceFileContent {
@@ -52,18 +54,22 @@ interface EpubSelectFileResult {
 }
 
 interface EpubWorkspaceInspectResponse {
-  exportPath: string;
   result: EpubInspectResult;
+  revision: number;
+  aceUnavailableReason?: string;
 }
 
 interface EpubWorkspaceExportResult {
   workspaceId: string;
   filePath: string;
+  revision: number;
 }
 
 interface EpubWorkspaceExportAsResult {
   canceled: boolean;
   filePath: string | null;
+  files?: EpubWorkspaceFile[];
+  revision?: number;
 }
 
 interface EpubIssueTarget {
@@ -85,8 +91,10 @@ interface EpubWorkspaceState {
   activeFilePath: string;
   activeContent: string;
   issues: EpubInspectError[];
+  logs: string[];
   exportPath: string;
   message: string;
+  revision: number;
 }
 
 // Top-level renderer state: the full set of open workspace tabs plus which
@@ -96,6 +104,7 @@ interface EpubAppState {
   activeWorkspaceId: string;
   activeWorkspace: EpubWorkspaceState;
   message: string;
+  runtimeMessage: string;
 }
 
 export {

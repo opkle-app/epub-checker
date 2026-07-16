@@ -61,16 +61,13 @@ class EpubMaker {
       const aceErrors: EpubInspectError[] = includeAce ? await this.secondInspect(targetEpubFilePath) : [];
       const allErrors: EpubInspectError[] = epubcheckErrors.concat(aceErrors);
 
-      if (deleteMode) {
-        await this.cleanupTarget(targetEpubFilePath);
-      }
-
       console.log(
-        `[epubMaker] inspect 완료 - epubcheck(FATAL/ERROR)=${epubcheckErrors.length} ace=${aceErrors.length} 합계=${allErrors.length}`,
+        `[epubMaker] inspect 완료 - epubcheck 항목=${epubcheckErrors.length} ace=${aceErrors.length} 합계=${allErrors.length}`,
       );
       return {
-        status: allErrors.length === 0 ? "success" : "error",
+        status: allErrors.some((item) => item.severity === "fatal" || item.severity === "error") ? "error" : "success",
         errors: allErrors,
+        logs: stdout === "" ? [] : stdout.split(/\r?\n/),
       };
     } catch (e) {
       console.log(e);
@@ -79,6 +76,14 @@ class EpubMaker {
       try {
         await fsPromise.rm(jsonOutPath, { force: true });
       } catch {}
+      // Moved here (from the end of the try block) so a throwing epubcheck/Ace
+      // run still cleans up deleteMode's target instead of leaking it — the
+      // previous placement only ran on the success path.
+      if (deleteMode) {
+        try {
+          await this.cleanupTarget(targetEpubFilePath);
+        } catch {}
+      }
     }
   };
 
@@ -256,7 +261,7 @@ class EpubMaker {
     const result: EpubInspectError[] = [];
     const parsed: Dictionary = JSON.parse(jsonRaw) as Dictionary;
     const messages: Dictionary[] = Array.isArray(parsed?.messages) ? parsed.messages : [];
-    const wanted: Set<string> = new Set(["FATAL", "ERROR"]);
+    const wanted: Set<string> = new Set(["FATAL", "ERROR", "WARNING", "USAGE", "INFO"]);
     for (const msg of messages) {
       try {
         const sevRaw: string = String(msg?.severity ?? "")
@@ -265,7 +270,7 @@ class EpubMaker {
         if (!wanted.has(sevRaw)) {
           continue;
         }
-        const severity: EpubInspectSeverity = sevRaw === "FATAL" ? "fatal" : "error";
+        const severity: EpubInspectSeverity = sevRaw.toLowerCase() as EpubInspectSeverity;
         const code: string = String(msg?.ID ?? "").trim();
         const rawMessage: string = String(msg?.message ?? "").trim();
         const suggestion: string = typeof msg?.suggestion === "string" ? msg.suggestion.trim() : "";
@@ -304,7 +309,7 @@ class EpubMaker {
 
   public parseEpubCheckStdout = (stdout: string): EpubInspectError[] => {
     const result: EpubInspectError[] = [];
-    const wanted: Set<string> = new Set(["FATAL", "ERROR"]);
+    const wanted: Set<string> = new Set(["FATAL", "ERROR", "WARNING", "USAGE", "INFO"]);
     const re: RegExp =
       /^(FATAL|ERROR|WARNING|USAGE|INFO)\s*\(([^)]+)\)\s*:\s*(.+?)\s*(?:\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\))?\s*:\s*(.+)$/i;
     for (const raw of String(stdout ?? "").split("\n")) {
@@ -320,7 +325,7 @@ class EpubMaker {
       if (!wanted.has(sevRaw)) {
         continue;
       }
-      const severity: EpubInspectSeverity = sevRaw === "FATAL" ? "fatal" : "error";
+      const severity: EpubInspectSeverity = sevRaw.toLowerCase() as EpubInspectSeverity;
       const code: string = m[2].trim();
       const filePath: string = m[3].trim().replace(/^[^/]+\.epub\//i, "");
       const ln: number = m[4] !== undefined ? Number(m[4]) : -1;
@@ -397,7 +402,26 @@ class EpubMaker {
       return finalResult;
     } catch (e) {
       console.log(e);
-      return [];
+      // Returning [] here used to make a failed Ace run (Chromium not
+      // launching, a timeout, epub-utils failing to extract the archive)
+      // indistinguishable from "Ace ran and found zero accessibility
+      // issues" — inspectEpub() would then report status:"success" even
+      // though the accessibility check never actually completed. Surfacing
+      // this as a visible error entry instead means the user sees that the
+      // check didn't run rather than being told the EPUB is clean.
+      return [
+        {
+          fileName: "접근성 검사(Ace)",
+          line: "",
+          error: `접근성 검사를 실행하지 못했습니다: ${(e as Error)?.message ?? e}`,
+          severity: "error",
+          code: "ace-run-failed",
+          lineNumber: -1,
+          column: -1,
+          rawMessage: String((e as Error)?.message ?? e),
+          source: "ace",
+        },
+      ];
     }
   };
 }

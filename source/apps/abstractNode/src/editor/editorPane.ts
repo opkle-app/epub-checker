@@ -49,6 +49,7 @@ class EditorPane {
   private view: EditorView;
   private languageCompartment: Compartment = new Compartment();
   private decorationCompartment: Compartment = new Compartment();
+  private lineSeparatorCompartment: Compartment = new Compartment();
   private currentFilePath: string = "";
   private isSettingContent: boolean = false;
 
@@ -67,13 +68,23 @@ class EditorPane {
     this.view = new EditorView({
       state: EditorState.create({
         doc: "",
-        extensions: this.createExtensions(""),
+        extensions: this.createExtensions("", ""),
       }),
       parent: this.editorHost,
     });
   }
 
-  private createExtensions = (filePath: string): Extension[] => {
+  // CodeMirror's `Text` always splits/joins with plain "\n" internally unless
+  // told otherwise via this facet — without it, loading a CRLF-authored XHTML
+  // file (common from Windows-authored EPUBs) and saving after a single
+  // keystroke silently rewrites every line ending in the file to LF. Detecting
+  // CRLF in the loaded content and configuring the facet makes CodeMirror
+  // split/join using the file's own original separator instead.
+  private getLineSeparatorExtension = (content: string): Extension => {
+    return content.includes("\r\n") ? EditorState.lineSeparator.of("\r\n") : [];
+  };
+
+  private createExtensions = (filePath: string, content: string): Extension[] => {
     return [
       lineNumbers(),
       highlightActiveLineGutter(),
@@ -95,10 +106,16 @@ class EditorPane {
       highlightActiveLine(),
       this.languageCompartment.of(this.getLanguageExtension(filePath)),
       this.decorationCompartment.of(this.getDecorationExtensions(filePath)),
+      this.lineSeparatorCompartment.of(this.getLineSeparatorExtension(content)),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !this.isSettingContent) {
-          this.onChange(update.state.doc.toString());
+          // `doc.toString()` always joins with "\n" regardless of the
+          // lineSeparator facet (Text is separator-agnostic internally) —
+          // toJSON() + an explicit join is the documented way to serialize
+          // back out using the file's actual configured separator.
+          const lineSeparator = update.state.facet(EditorState.lineSeparator) ?? "\n";
+          this.onChange(update.state.doc.toJSON().join(lineSeparator));
         }
       }),
       keymap.of([
@@ -768,15 +785,22 @@ class EditorPane {
   // suppresses the updateListener in createExtensions so this doesn't get
   // mistaken for a user edit and re-fire onChange/auto-save.
   private replaceDocument = (content: string): void => {
+    // try/finally so a throwing dispatch (e.g. a pathological extension
+    // interaction) can't leave isSettingContent stuck true forever, which
+    // would permanently suppress onChange/autosave for the rest of the
+    // session with no visible indication anything was wrong.
     this.isSettingContent = true;
-    this.view.dispatch({
-      changes: {
-        from: 0,
-        to: this.view.state.doc.length,
-        insert: content,
-      },
-    });
-    this.isSettingContent = false;
+    try {
+      this.view.dispatch({
+        changes: {
+          from: 0,
+          to: this.view.state.doc.length,
+          insert: content,
+        },
+      });
+    } finally {
+      this.isSettingContent = false;
+    }
   };
 
   private getIssuePosition = (issue: EpubInspectError): { from: number; to: number } => {
@@ -824,10 +848,18 @@ class EditorPane {
         effects: [
           this.languageCompartment.reconfigure(this.getLanguageExtension(filePath)),
           this.decorationCompartment.reconfigure(this.getDecorationExtensions(filePath)),
+          this.lineSeparatorCompartment.reconfigure(this.getLineSeparatorExtension(content)),
         ],
       });
     }
-    if (this.view.state.doc.toString() !== content) {
+    // Must compare using the same facet-aware serialization as the
+    // updateListener's onChange (doc.toString() always joins with "\n"
+    // regardless of the lineSeparator facet). Comparing against toString()
+    // here made this condition true on every render for any multi-line CRLF
+    // file (content is "\r\n"-joined, toString() is always "\n"-joined),
+    // so every keystroke replaced the entire document and reset the cursor.
+    const currentLineSeparator = this.view.state.facet(EditorState.lineSeparator) ?? "\n";
+    if (this.view.state.doc.toJSON().join(currentLineSeparator) !== content) {
       this.replaceDocument(content);
     }
   };

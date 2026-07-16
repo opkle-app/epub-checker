@@ -82,18 +82,40 @@ class LauncherRuntime {
   // and the userData download location.
   private static chromiumCandidatesUnder = (chromiumRoot: string): string[] => {
     return [
-      path.join(chromiumRoot, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(
+        chromiumRoot,
+        "chrome-mac-arm64",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing",
+      ),
       path.join(chromiumRoot, "chrome-mac-arm64", "Chromium.app", "Contents", "MacOS", "Chromium"),
-      path.join(chromiumRoot, "chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(
+        chromiumRoot,
+        "chrome-mac-x64",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing",
+      ),
       path.join(chromiumRoot, "chrome-mac-x64", "Chromium.app", "Contents", "MacOS", "Chromium"),
-      path.join(chromiumRoot, "chrome-mac", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
+      path.join(
+        chromiumRoot,
+        "chrome-mac",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing",
+      ),
       path.join(chromiumRoot, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
       path.join(chromiumRoot, "Chromium.app", "Contents", "MacOS", "Chromium"),
-      // Windows
-      path.join(chromiumRoot, "chrome-win-x64", "chrome.exe"),
+      // Windows (Playwright's actual folder is "chrome-win64" — no per-arch
+      // arm64 build is published, "chrome-win" is only kept for older archives)
+      path.join(chromiumRoot, "chrome-win64", "chrome.exe"),
       path.join(chromiumRoot, "chrome-win", "chrome.exe"),
-      // Linux
-      path.join(chromiumRoot, "chrome-linux-x64", "chrome"),
+      // Linux (same story: "chrome-linux64" is current, "chrome-linux" legacy)
+      path.join(chromiumRoot, "chrome-linux64", "chrome"),
       path.join(chromiumRoot, "chrome-linux", "chrome"),
       path.join(chromiumRoot, "chromium"),
     ];
@@ -214,11 +236,20 @@ class LauncherRuntime {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PLAYWRIGHT_BROWSERS_PATH: browsersPath },
         stdio: "inherit",
       });
+      const timeout = setTimeout(
+        () => {
+          child.kill();
+          reject(new Error("playwright install chromium timed out after 15 minutes"));
+        },
+        15 * 60 * 1000,
+      );
       child.on("error", (err) => {
+        clearTimeout(timeout);
         console.error("[LauncherRuntime] playwright install chromium failed to spawn:", err);
         reject(err);
       });
       child.on("exit", (code, signal) => {
+        clearTimeout(timeout);
         if (code === 0) {
           console.log("[LauncherRuntime] playwright install chromium completed successfully (exit 0)");
           resolve();
@@ -279,43 +310,66 @@ class LauncherRuntime {
 
     onProgress?.("Downloading local Chromium runtime for accessibility checks...");
     console.log(`[LauncherRuntime] download cache: ${downloadCacheDir}`);
-    await LauncherRuntime.installPlaywrightChromium(downloadCacheDir);
-    console.log("[LauncherRuntime] Playwright download step finished; installing into userData...");
+    try {
+      await LauncherRuntime.installPlaywrightChromium(downloadCacheDir);
+      console.log("[LauncherRuntime] Playwright download step finished; installing into userData...");
 
-    const versionDirs = readdirSync(downloadCacheDir).filter(
-      (name) => name.startsWith("chromium-") && !name.includes("headless_shell"),
-    );
-    if (versionDirs.length === 0) {
-      throw new Error(`playwright install produced no chromium-* folder under ${downloadCacheDir}`);
-    }
-    const versionDir = path.join(downloadCacheDir, versionDirs.sort().at(-1) as string);
-    console.log(`[LauncherRuntime] using Playwright version folder: ${versionDir}`);
-
-    const platformPrefix =
-      process.platform === "darwin" ? "chrome-mac" : process.platform === "win32" ? "chrome-win" : "chrome-linux";
-    const matching = readdirSync(versionDir).filter((name) => name.startsWith(platformPrefix));
-    if (matching.length === 0) {
-      throw new Error(`no ${platformPrefix}* folder found under ${versionDir}`);
-    }
-    const archSpecific = `${platformPrefix}-${process.arch}`;
-    const chosen = matching.includes(archSpecific) ? archSpecific : matching.sort((a, b) => b.length - a.length)[0];
-
-    const destRoot = path.join(userDataRoot, "chromium");
-    const destDir = path.join(destRoot, chosen);
-    rmSync(destDir, { recursive: true, force: true });
-    mkdirSync(destRoot, { recursive: true });
-    cpSync(path.join(versionDir, chosen), destDir, { recursive: true });
-    rmSync(downloadCacheDir, { recursive: true, force: true });
-    console.log(`[LauncherRuntime] Chromium installed to ${destDir}`);
-
-    onProgress?.("Chromium runtime ready.");
-    const resolved = LauncherRuntime.resolve();
-    if (resolved.missing.includes("chromium")) {
-      throw new Error(
-        `Chromium was copied to ${destDir} but still does not resolve (looked for ${resolved.chromiumExecutablePath})`,
+      const versionDirs = readdirSync(downloadCacheDir).filter(
+        (name) => name.startsWith("chromium-") && !name.includes("headless_shell"),
       );
+      if (versionDirs.length === 0) {
+        throw new Error(`playwright install produced no chromium-* folder under ${downloadCacheDir}`);
+      }
+      const versionDir = path.join(downloadCacheDir, versionDirs.sort().at(-1) as string);
+      console.log(`[LauncherRuntime] using Playwright version folder: ${versionDir}`);
+
+      const platformPrefix =
+        process.platform === "darwin" ? "chrome-mac" : process.platform === "win32" ? "chrome-win" : "chrome-linux";
+      const matching = readdirSync(versionDir).filter((name) => name.startsWith(platformPrefix));
+      if (matching.length === 0) {
+        throw new Error(`no ${platformPrefix}* folder found under ${versionDir}`);
+      }
+      // Playwright's actual folder-naming convention differs by OS: mac ships
+      // separate per-arch builds ("chrome-mac-arm64" / "chrome-mac-x64"), while
+      // win/linux only ever publish one 64-bit build named "chrome-win64" /
+      // "chrome-linux64" (no arm64-specific folder, no arch name in the suffix).
+      // Falling back to "longest matching name" when the expected name is
+      // absent risked silently picking a mismatched-arch build, so this only
+      // falls back with an explicit warning rather than trusting sort order.
+      const expectedName = process.platform === "darwin" ? `${platformPrefix}-${process.arch}` : `${platformPrefix}64`;
+      let chosen: string;
+      if (matching.includes(expectedName)) {
+        chosen = expectedName;
+      } else {
+        chosen = matching.sort((a, b) => b.length - a.length)[0] as string;
+        console.warn(
+          `[LauncherRuntime] expected Chromium folder "${expectedName}" not found under ${versionDir} ` +
+            `(found: ${matching.join(", ")}); falling back to "${chosen}" — this may be the wrong architecture.`,
+        );
+      }
+
+      const destRoot = path.join(userDataRoot, "chromium");
+      const destDir = path.join(destRoot, chosen);
+      rmSync(destDir, { recursive: true, force: true });
+      mkdirSync(destRoot, { recursive: true });
+      cpSync(path.join(versionDir, chosen), destDir, { recursive: true });
+      rmSync(downloadCacheDir, { recursive: true, force: true });
+      console.log(`[LauncherRuntime] Chromium installed to ${destDir}`);
+
+      onProgress?.("Chromium runtime ready.");
+      const resolved = LauncherRuntime.resolve();
+      if (resolved.missing.includes("chromium")) {
+        throw new Error(
+          `Chromium was copied to ${destDir} but still does not resolve (looked for ${resolved.chromiumExecutablePath})`,
+        );
+      }
+      return resolved;
+    } catch (error) {
+      // A partial browser archive can poison the next startup and consume
+      // hundreds of MiB. Playwright can safely start from an empty cache.
+      rmSync(downloadCacheDir, { recursive: true, force: true });
+      throw error;
     }
-    return resolved;
   };
 }
 

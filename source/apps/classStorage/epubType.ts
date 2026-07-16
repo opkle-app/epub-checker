@@ -16,6 +16,7 @@ interface EpubInspectError {
 interface EpubInspectResult {
   status: "success" | "error";
   errors: EpubInspectError[];
+  logs: string[];
 }
 
 export { EpubInspectError, EpubInspectSeverity, EpubInspectResult };

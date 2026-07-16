@@ -27,6 +27,10 @@ class WorkspaceStore {
   private autoSaveInFlight: Set<string> = new Set();
   private autoSaveAgain: Set<string> = new Set();
   private pendingAutoSaves: Map<string, PendingAutoSave> = new Map();
+  // Bumped on every openInternalFile call, keyed by workspaceId, so a slower
+  // earlier request can't clobber a faster later one when both resolve out
+  // of order (see openInternalFile below).
+  private openFileRequestTokens: Map<string, number> = new Map();
   public state: EpubAppState;
 
   constructor(bridge: ElectronBridge) {
@@ -37,6 +41,8 @@ class WorkspaceStore {
       activeWorkspaceId: "",
       activeWorkspace: emptyWorkspace,
       message: "EPUB 파일을 열어 검사를 시작하세요.",
+      revision: 0,
+      runtimeMessage: "로컬 검사 런타임을 확인하는 중입니다.",
     };
   }
 
@@ -49,6 +55,10 @@ class WorkspaceStore {
     return () => this.listeners.delete(listener);
   };
 
+  public setRuntimeStatus = (message: string): void => {
+    this.setAppState({ runtimeMessage: message });
+  };
+
   private createEmptyWorkspace = (): EpubWorkspaceState => {
     return {
       stage: "idle",
@@ -59,6 +69,7 @@ class WorkspaceStore {
       activeFilePath: "",
       activeContent: "",
       issues: [],
+      logs: [],
       exportPath: "",
       message: "EPUB 파일을 열어 검사를 시작하세요.",
     };
@@ -152,7 +163,41 @@ class WorkspaceStore {
     }
   };
 
-  public closeTab = (workspaceId: string): void => {
+  public closeTab = async (workspaceId: string): Promise<void> => {
+    const target = this.state.tabs.find((tab) => tab.workspaceId === workspaceId);
+    if (!target) {
+      return;
+    }
+    if (
+      (target.files.some((file) => file.dirty) || this.getAutoSaveKeysForWorkspace(workspaceId).length > 0) &&
+      !window.confirm(
+        `“${target.fileName}”의 내보내지 않은 수정 사항이 있습니다. 이 탭을 닫으면 수정 사항이 사라집니다.`,
+      )
+    ) {
+      return;
+    }
+    // Flush before discarding — a pending debounced edit used to just get
+    // deleted here unsaved if the tab closed within the 250ms autosave
+    // window, silently dropping the user's last keystrokes. Looped (bounded)
+    // because the tab stays fully visible/editable for the whole duration of
+    // this await — a keystroke landing during that IPC round-trip would
+    // schedule a brand-new pending save that a single flush wouldn't catch.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await this.flushPendingAutoSaves(workspaceId);
+      } catch (error) {
+        console.error("[workspaceStore] failed to flush pending edits before closing tab:", error);
+        this.updateWorkspace(workspaceId, {
+          stage: "error",
+          message: `자동 저장에 실패하여 탭을 닫지 않았습니다: ${(error as Error).message}`,
+        });
+        return;
+      }
+      if (this.getAutoSaveKeysForWorkspace(workspaceId).length === 0) {
+        break;
+      }
+    }
+    this.openFileRequestTokens.delete(workspaceId);
     for (const key of Array.from(this.autoSaveTimers.keys())) {
       if (key.startsWith(`${workspaceId}::`)) {
         const timer = this.autoSaveTimers.get(key);
@@ -171,6 +216,14 @@ class WorkspaceStore {
       tabs,
       activeWorkspaceId,
     });
+    // Releases the backend's in-memory session for this EPUB — without this
+    // call, EpubWorkspaceManager on the main process retains every workspace
+    // ever opened for the life of the app, not just currently-open ones.
+    try {
+      await this.bridge.closeWorkspace(workspaceId);
+    } catch (error) {
+      console.error("[workspaceStore] failed to close backend workspace session:", error);
+    }
   };
 
   public openByDialog = async (): Promise<void> => {
@@ -214,8 +267,10 @@ class WorkspaceStore {
         activeFilePath: firstFile?.path ?? "",
         activeContent: "",
         issues: [],
+        logs: [],
         exportPath: "",
         message: "파일을 열었습니다. 검사하거나 내부 문서를 선택하세요.",
+        revision: workspace.revision,
       };
       this.upsertWorkspace(nextWorkspace);
       if (firstFile) {
@@ -235,19 +290,27 @@ class WorkspaceStore {
     if (!target) {
       return;
     }
+    // Token guard: if a second openInternalFile for the same tab starts
+    // (user clicks another file) before this one's IPC call resolves, this
+    // one must not win just because it happens to resolve first.
+    const token = (this.openFileRequestTokens.get(workspaceId) ?? 0) + 1;
+    this.openFileRequestTokens.set(workspaceId, token);
+
     const file = await this.bridge.getFile(target.workspaceId, filePath);
-    const nextWorkspace: EpubWorkspaceState = {
-      ...target,
+
+    if (this.openFileRequestTokens.get(workspaceId) !== token) {
+      return;
+    }
+    // updateWorkspace re-reads the tab fresh (by id) and never forces
+    // activeWorkspaceId — so a concurrent autosave's field updates on this
+    // tab aren't clobbered by a stale pre-await snapshot, and switching to
+    // (or closing) a different tab while this was pending is preserved
+    // instead of getting silently snapped back to this one.
+    this.updateWorkspace(workspaceId, {
       stage: "editing",
       activeFilePath: file.path,
       activeContent: file.content,
       message: `${file.path} 편집 중`,
-    };
-    const tabs = this.state.tabs.map((tab) => (tab.workspaceId === target.workspaceId ? nextWorkspace : tab));
-    this.setAppState({
-      tabs,
-      activeWorkspaceId: target.workspaceId,
-      activeWorkspace: nextWorkspace,
     });
   };
 
@@ -282,7 +345,12 @@ class WorkspaceStore {
     this.pendingAutoSaves.set(key, { workspaceId, filePath, content });
     const timer = window.setTimeout(() => {
       this.autoSaveTimers.delete(key);
-      void this.flushAutoSave(key);
+      void this.flushAutoSave(key).catch((error) => {
+        this.updateWorkspace(workspaceId, {
+          stage: "error",
+          message: `자동 저장 실패: ${(error as Error).message}`,
+        });
+      });
     }, 250);
     this.autoSaveTimers.set(key, timer);
   };
@@ -301,14 +369,27 @@ class WorkspaceStore {
     this.pendingAutoSaves.delete(key);
     this.autoSaveInFlight.add(key);
     try {
-      await this.saveWorkspaceFile(pending.workspaceId, pending.filePath, pending.content, "자동 저장됨");
+      await this.saveWorkspaceFile(pending.workspaceId, pending.filePath, pending.content, "작업 공간에 반영됨");
+    } catch (error) {
+      // Preserve the failed content unless a newer edit is already queued.
+      // Inspection/export/close can retry it instead of silently validating
+      // or discarding an older backend copy.
+      if (!this.pendingAutoSaves.has(key)) {
+        this.pendingAutoSaves.set(key, pending);
+      }
+      throw error;
     } finally {
       this.autoSaveInFlight.delete(key);
       if (this.autoSaveAgain.has(key)) {
         this.autoSaveAgain.delete(key);
         const nextPending = this.pendingAutoSaves.get(key);
         if (nextPending) {
-          void this.flushAutoSave(key);
+          void this.flushAutoSave(key).catch((error) => {
+            this.updateWorkspace(pending.workspaceId, {
+              stage: "error",
+              message: `자동 저장 실패: ${(error as Error).message}`,
+            });
+          });
         }
       }
     }
@@ -325,9 +406,50 @@ class WorkspaceStore {
     ).filter((key) => key.startsWith(prefix));
   };
 
+  // Bounded so a hung save IPC call (main process stuck, dead channel) can't
+  // wedge this loop — and everything awaiting it (closeTab/inspect/export) —
+  // forever. Those callers already catch a rejection here and surface it as
+  // stage:"error" instead of leaving the UI silently stuck.
+  private static readonly AUTO_SAVE_IDLE_TIMEOUT_MS = 10000;
+
   private waitForAutoSaveIdle = async (key: string): Promise<void> => {
+    const deadline = Date.now() + WorkspaceStore.AUTO_SAVE_IDLE_TIMEOUT_MS;
     while (this.autoSaveTimers.has(key) || this.pendingAutoSaves.has(key) || this.autoSaveInFlight.has(key)) {
+      if (Date.now() > deadline) {
+        throw new Error(`자동 저장이 ${WorkspaceStore.AUTO_SAVE_IDLE_TIMEOUT_MS / 1000}초 내에 끝나지 않았습니다.`);
+      }
       await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
+    }
+  };
+
+  // Called from AppController's before-close flush registration (see
+  // electronBridge.ts/preload.ts) — flushes every open tab's pending
+  // debounced edits, not just the active one, since the whole app quitting
+  // (not just one tab closing) previously had no safeguard at all: the
+  // titlebar × / Cmd+Q / OS shutdown could close the window mid-debounce
+  // with zero warning and zero attempt to save first.
+  public prepareForAppClose = async (startFlush: () => void = () => undefined): Promise<boolean> => {
+    const dirtyTabs = this.state.tabs.filter(
+      (tab) => tab.files.some((file) => file.dirty) || this.getAutoSaveKeysForWorkspace(tab.workspaceId).length > 0,
+    );
+    if (
+      dirtyTabs.length > 0 &&
+      !window.confirm(
+        `${dirtyTabs.length}개의 EPUB에 내보내지 않은 수정 사항이 있습니다. 앱을 종료하면 수정 사항이 사라집니다.`,
+      )
+    ) {
+      return false;
+    }
+    // The main-process safety timeout starts only after the user has made a
+    // decision. Time spent reading the confirmation dialog must never count
+    // as a hung autosave and force-close the app behind the dialog.
+    startFlush();
+    try {
+      await Promise.all(this.state.tabs.map((tab) => this.flushPendingAutoSaves(tab.workspaceId)));
+      return true;
+    } catch (error) {
+      window.alert(`자동 저장에 실패하여 앱을 종료하지 않았습니다: ${(error as Error).message}`);
+      return false;
     }
   };
 
@@ -357,6 +479,7 @@ class WorkspaceStore {
     const workspace = await this.bridge.updateFile(workspaceId, filePath, content);
     this.updateWorkspace(workspaceId, {
       files: workspace.files,
+      revision: workspace.revision,
       message,
     });
   };
@@ -371,7 +494,15 @@ class WorkspaceStore {
       await this.openByDialog();
       return;
     }
-    await this.flushPendingAutoSaves(active.workspaceId);
+    try {
+      await this.flushPendingAutoSaves(active.workspaceId);
+    } catch (error) {
+      // Without this, a save failing here left the UI stuck on whatever it
+      // showed before the click with zero feedback that inspect() never ran
+      // (this call has no .catch() at its click-handler call site).
+      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
+      return;
+    }
     await this.inspectWorkspace(active.workspaceId);
   };
 
@@ -399,14 +530,21 @@ class WorkspaceStore {
     await this.waitForInspectionOverlayPaint();
     try {
       const response = await this.bridge.inspectWorkspace(workspaceId);
+      const current = this.state.tabs.find((tab) => tab.workspaceId === workspaceId);
+      const stale = !current || current.revision !== response.revision;
       this.updateWorkspace(workspaceId, {
-        stage: response.result.errors.length === 0 ? "exported" : "ready",
+        stage: !stale && response.result.status === "success" ? "validated" : "ready",
         issues: response.result.errors,
-        exportPath: response.exportPath,
-        message:
-          response.result.errors.length === 0
-            ? "오류가 없습니다. 수정된 EPUB을 다운로드할 수 있습니다."
-            : `${response.result.errors.length}개의 검사 항목이 발견되었습니다.`,
+        logs: response.result.logs,
+        message: stale
+          ? "검사 중 내용이 변경되어 결과가 현재 편집본과 일치하지 않습니다. 다시 검사하세요."
+          : response.result.errors.length === 0
+            ? response.aceUnavailableReason
+              ? "EPUBCheck 검사는 통과했습니다. Chromium을 준비하지 못해 Ace 검사는 건너뛰었습니다."
+              : "EPUBCheck와 Ace 검사에서 오류가 없습니다. 수정된 EPUB을 내보낼 수 있습니다."
+            : `${response.result.errors.length}개의 검사 항목이 발견되었습니다.${
+                response.aceUnavailableReason ? " Ace 검사는 Chromium을 준비하지 못해 건너뛰었습니다." : ""
+              }`,
       });
     } catch (error) {
       this.updateWorkspace(workspaceId, { stage: "error", message: (error as Error).message });
@@ -422,17 +560,35 @@ class WorkspaceStore {
     if (active.workspaceId === "") {
       return;
     }
-    await this.flushPendingAutoSaves(active.workspaceId);
-    const defaultName = active.fileName.replace(/\.epub$/i, "") + "-repaired.epub";
-    const response = await this.bridge.exportWorkspaceAs(active.workspaceId, defaultName);
-    if (response.canceled || !response.filePath) {
+    try {
+      await this.flushPendingAutoSaves(active.workspaceId);
+    } catch (error) {
+      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
       return;
     }
-    this.updateActiveWorkspace({
-      stage: "exported",
-      exportPath: response.filePath,
-      message: `EPUB 생성 완료: ${response.filePath}`,
-    });
+    const defaultName = active.fileName.replace(/\.epub$/i, "") + "-repaired.epub";
+    try {
+      const response = await this.bridge.exportWorkspaceAs(active.workspaceId, defaultName);
+      if (response.canceled || !response.filePath) {
+        return;
+      }
+      // updateWorkspace(active.workspaceId, ...), not updateActiveWorkspace —
+      // the save dialog + backend rebuild above is async, so by the time it
+      // resolves the user may have switched to a different tab; this must
+      // still land on the tab that was actually exported, not whatever
+      // happens to be active right now.
+      this.updateWorkspace(active.workspaceId, {
+        stage: "exported",
+        exportPath: response.filePath,
+        files: response.files ?? active.files,
+        message:
+          response.revision === this.state.tabs.find((tab) => tab.workspaceId === active.workspaceId)?.revision
+            ? `EPUB 생성 완료: ${response.filePath}`
+            : `EPUB 생성 완료: ${response.filePath} (내보내기 중 추가 수정 사항이 생겨 작업 공간은 계속 수정됨 상태입니다.)`,
+      });
+    } catch (error) {
+      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
+    }
   };
 }
 

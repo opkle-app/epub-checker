@@ -34,6 +34,7 @@ export interface EpubInspectError {
 export interface EpubInspectResult {
   status: "success" | "error";
   errors: EpubInspectError[];
+  logs: string[];
 }
 
 export interface EpubSelectFileResult {
@@ -61,6 +62,7 @@ export interface EpubWorkspaceOpenResult {
   sourcePath: string;
   fileName: string;
   files: EpubWorkspaceFile[];
+  revision: number;
 }
 
 export interface EpubWorkspaceFileContent {
@@ -72,11 +74,14 @@ export interface EpubWorkspaceFileContent {
 export interface EpubWorkspaceExportResult {
   workspaceId: string;
   filePath: string;
+  revision: number;
 }
 
 export interface EpubWorkspaceExportAsResult {
   canceled: boolean;
   filePath: string | null;
+  files?: EpubWorkspaceFile[];
+  revision?: number;
 }
 
 contextBridge.exposeInMainWorld("electronAPI", {
@@ -85,14 +90,39 @@ contextBridge.exposeInMainWorld("electronAPI", {
   maximize: () => ipcRenderer.send("window:maximize"),
   close: () => ipcRenderer.send("window:close"),
   isMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  // main.ts intercepts the window's close event and sends "app:flush-before-close"
+  // instead of closing immediately, waiting (with a timeout) for "app:flush-complete"
+  // before actually closing — so a pending debounced edit isn't silently dropped by
+  // the titlebar ×/Cmd+Q/OS shutdown the way tab-close used to be before that was fixed.
+  onBeforeClose: (callback: (startFlush: () => void) => Promise<boolean> | boolean): void => {
+    ipcRenderer.on("app:flush-before-close", async () => {
+      let canClose = false;
+      try {
+        ipcRenderer.send("app:close-confirming");
+        canClose = await callback(() => ipcRenderer.send("app:flush-started"));
+      } catch (error) {
+        console.error("Failed to prepare workspaces for close:", error);
+      } finally {
+        ipcRenderer.send("app:flush-complete", { canClose });
+      }
+    });
+  },
   showNotification: (title: string, body: string) => ipcRenderer.send("app:notify", { title, body }),
   aboutComputer: () => ipcRenderer.invoke("aboutComputer"),
-  captureScreenshot: (options?: { filePath?: string; format?: "png" | "jpeg"; quality?: number }) =>
+  // Save destination is always the native dialog (main.ts's "screen:capture"
+  // handler) — no filePath option here, to avoid re-introducing an arbitrary
+  // file write via a renderer-supplied path.
+  captureScreenshot: (options?: { format?: "png" | "jpeg"; quality?: number }) =>
     ipcRenderer.invoke("screen:capture", options),
 
   // EPUB runtime and workspace calls stay on the main process side.
   // The renderer only receives paths, structured metadata, and editable text.
   getEpubRuntimeInfo: (): Promise<LauncherRuntimeInfo> => ipcRenderer.invoke("epub:runtime-info"),
+  onEpubRuntimeStatus: (callback: (message: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message);
+    ipcRenderer.on("epub:runtime-status", listener);
+    return () => ipcRenderer.removeListener("epub:runtime-status", listener);
+  },
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   selectEpubFile: (): Promise<EpubSelectFileResult> => ipcRenderer.invoke("epub:select-file"),
   inspectEpubFile: (filePath: string, options?: { includeAce?: boolean }): Promise<EpubInspectResponse> => {
@@ -104,6 +134,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openEpubWorkspace: (filePath: string): Promise<EpubWorkspaceOpenResult> => {
     return ipcRenderer.invoke("workspace:open", { filePath });
   },
+  closeEpubWorkspace: (workspaceId: string): Promise<{ closed: boolean }> => {
+    return ipcRenderer.invoke("workspace:close", { workspaceId });
+  },
   getEpubWorkspaceFile: (workspaceId: string, filePath: string): Promise<EpubWorkspaceFileContent> => {
     return ipcRenderer.invoke("workspace:get-file", { workspaceId, filePath });
   },
@@ -114,8 +147,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   ): Promise<EpubWorkspaceOpenResult> => {
     return ipcRenderer.invoke("workspace:update-file", { workspaceId, filePath, content });
   },
-  exportEpubWorkspace: (workspaceId: string, outputPath?: string): Promise<EpubWorkspaceExportResult> => {
-    return ipcRenderer.invoke("workspace:export", { workspaceId, outputPath });
+  exportEpubWorkspace: (workspaceId: string): Promise<EpubWorkspaceExportResult> => {
+    return ipcRenderer.invoke("workspace:export", { workspaceId });
   },
   exportEpubWorkspaceAs: (workspaceId: string, defaultName?: string): Promise<EpubWorkspaceExportAsResult> => {
     return ipcRenderer.invoke("workspace:export-as", { workspaceId, defaultName });
@@ -123,7 +156,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   inspectEpubWorkspace: (
     workspaceId: string,
     options?: { includeAce?: boolean },
-  ): Promise<{ exportPath: string; result: EpubInspectResult }> => {
+  ): Promise<{ result: EpubInspectResult; revision: number; aceUnavailableReason?: string }> => {
     return ipcRenderer.invoke("workspace:inspect", {
       workspaceId,
       includeAce: options?.includeAce,

@@ -79,6 +79,19 @@ class EpubChecker {
   public mainWindow: BrowserWindow | null;
   private launcherRuntime: LauncherRuntimeInfo | null = null;
   private workspaceManager: EpubWorkspaceManager = new EpubWorkspaceManager();
+  // Guards the window "close" interception below: closeAfterFlush marks that
+  // the flush already ran (let this specific close through); closeFlushInFlight
+  // stops a second close attempt (Cmd+Q right after clicking ×) from firing a
+  // second overlapping flush-before-close round-trip.
+  private closeAfterFlush: boolean = false;
+  private closeFlushInFlight: boolean = false;
+
+  private reportRuntimeStatus = (message: string): void => {
+    console.log(`[LauncherRuntime] ${message}`);
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send("epub:runtime-status", message);
+    }
+  };
 
   constructor() {
     this.iconBaseDir = path.join(Mother.assetPath, "./designSource");
@@ -151,6 +164,24 @@ class EpubChecker {
           this.mainWindow = null;
         }
       });
+      this.closeAfterFlush = false;
+      this.closeFlushInFlight = false;
+      // Unifies every way the window can close (titlebar ×'s window:close IPC,
+      // Cmd+Q, OS shutdown, window-manager close) through one interception
+      // point, since they all end up calling BrowserWindow#close() and firing
+      // this same event. Without this, a pending debounced edit could be
+      // lost on quit exactly like tab-close could before that was fixed.
+      win.on("close", (event) => {
+        if (this.closeAfterFlush) {
+          return;
+        }
+        event.preventDefault();
+        if (this.closeFlushInFlight) {
+          return;
+        }
+        this.closeFlushInFlight = true;
+        this.flushRendererBeforeClose(win);
+      });
 
       setTimeout(() => {
         if (instance.mainWindow !== null && !instance.mainWindow.isDestroyed()) {
@@ -165,6 +196,14 @@ class EpubChecker {
               }
             });
           }
+          instance.mainWindow.webContents.once("did-finish-load", () => {
+            const runtime = LauncherRuntime.resolve();
+            instance.reportRuntimeStatus(
+              runtime.missing.includes("chromium")
+                ? "접근성 검사용 Chromium을 백그라운드에서 준비하는 중입니다."
+                : "접근성 검사 런타임이 준비되었습니다.",
+            );
+          });
         }
       }, 300);
     }
@@ -220,41 +259,39 @@ class EpubChecker {
       return await aboutComputerInfo();
     });
 
-    ipcMain.handle(
-      "screen:capture",
-      async (_, options?: { filePath?: string; format?: "png" | "jpeg"; quality?: number }) => {
-        if (!this.mainWindow || this.mainWindow.isDestroyed()) {
-          throw new Error("No active window");
-        }
+    ipcMain.handle("screen:capture", async (_, options?: { format?: "png" | "jpeg"; quality?: number }) => {
+      if (!this.mainWindow || this.mainWindow.isDestroyed()) {
+        throw new Error("No active window");
+      }
 
-        const image = await this.captureWindowScreenshot();
-        const format = options?.format ?? "png";
-        let buffer: Buffer;
+      const image = await this.captureWindowScreenshot();
+      const format = options?.format ?? "png";
+      let buffer: Buffer;
 
-        if (format === "jpeg") {
-          const quality = options?.quality ?? 85;
-          buffer = image.toJPEG(quality);
-        } else {
-          buffer = image.toPNG();
-        }
+      if (format === "jpeg") {
+        const quality = options?.quality ?? 85;
+        buffer = image.toJPEG(quality);
+      } else {
+        buffer = image.toPNG();
+      }
 
-        let savePath = options?.filePath;
-        if (!savePath) {
-          const result = await dialog.showSaveDialog(this.mainWindow, {
-            title: "Save Screenshot",
-            defaultPath: `screenshot-${Date.now()}.${format}`,
-            filters: [{ name: "Images", extensions: [format === "jpeg" ? "jpg" : "png"] }],
-          });
-          if (result.canceled || !result.filePath) {
-            return { canceled: true };
-          }
-          savePath = result.filePath;
-        }
+      // Save destination always comes from the native dialog, never from a
+      // renderer-supplied path — this channel used to accept an arbitrary
+      // `filePath` and write to it unvalidated, which is an arbitrary file
+      // write if anything in the renderer (a compromised dependency, an
+      // injected script) called it directly.
+      const result = await dialog.showSaveDialog(this.mainWindow, {
+        title: "Save Screenshot",
+        defaultPath: `screenshot-${Date.now()}.${format}`,
+        filters: [{ name: "Images", extensions: [format === "jpeg" ? "jpg" : "png"] }],
+      });
+      if (result.canceled || !result.filePath) {
+        return { canceled: true };
+      }
 
-        await fsPromise.writeFile(savePath, buffer);
-        return { saved: true, filePath: savePath, size: buffer.length };
-      },
-    );
+      await fsPromise.writeFile(result.filePath, buffer);
+      return { saved: true, filePath: result.filePath, size: buffer.length };
+    });
 
     ipcMain.handle("epub:runtime-info", async () => {
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
@@ -298,17 +335,17 @@ class EpubChecker {
       }
 
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
-      const includeAce = payload?.includeAce ?? true;
-      // mac downloads Chromium into userData in the background at startup; wait
-      // for it here if the user ran an Ace check before that finished.
+      let includeAce = payload?.includeAce ?? true;
+      let aceUnavailableReason: string | undefined;
+      // Do not make EPUBCheck wait for a potentially large first-run browser
+      // download. Keep the shared background install running and perform the
+      // standards check now; a later re-check will include Ace once ready.
       if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
-        try {
-          this.launcherRuntime = await LauncherRuntime.ensureChromium((message) =>
-            console.log(`[LauncherRuntime] ${message}`),
-          );
-        } catch (err) {
-          console.log("[LauncherRuntime] on-demand Chromium download failed:", err);
-        }
+        includeAce = false;
+        aceUnavailableReason = "Chromium is being prepared in the background";
+        void LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message)).catch((err) => {
+          this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        });
       }
       // EPUBCheck needs Java and the jar. Ace additionally needs Chromium.
       // Checking here gives the renderer a clear actionable error before a
@@ -339,7 +376,9 @@ class EpubChecker {
 
       return {
         runtime: this.launcherRuntime,
-        result,
+        result: aceUnavailableReason
+          ? { ...result, logs: result.logs.concat(`Ace skipped: ${aceUnavailableReason}`) }
+          : result,
       };
     });
 
@@ -358,12 +397,23 @@ class EpubChecker {
       return await this.workspaceManager.getFile(payload.workspaceId, payload.filePath);
     });
 
+    ipcMain.handle("workspace:close", async (_event, payload: { workspaceId: string }) => {
+      this.workspaceManager.close(payload.workspaceId);
+      return { closed: true };
+    });
+
     ipcMain.handle("workspace:update-file", async (_event, payload: EpubWorkspaceUpdatePayload) => {
       return await this.workspaceManager.updateFile(payload.workspaceId, payload.filePath, payload.content);
     });
 
-    ipcMain.handle("workspace:export", async (_event, payload: { workspaceId: string; outputPath?: string }) => {
-      return await this.workspaceManager.export(payload.workspaceId, payload.outputPath);
+    ipcMain.handle("workspace:export", async (_event, payload: { workspaceId: string }) => {
+      // No renderer-supplied output path here: this channel always exports to
+      // the manager's own internal temp location. Saving to an
+      // arbitrary/user-chosen filesystem path is "workspace:export-as" below,
+      // whose path always comes from a native save dialog, never from
+      // renderer-controlled input — writing straight to a caller-supplied
+      // path would be an arbitrary file write.
+      return await this.workspaceManager.export(payload.workspaceId);
     });
 
     ipcMain.handle("workspace:export-as", async (_event, payload: { workspaceId: string; defaultName?: string }) => {
@@ -380,23 +430,26 @@ class EpubChecker {
         };
       }
       const exported = await this.workspaceManager.export(payload.workspaceId, result.filePath);
+      const files = this.workspaceManager.markExported(payload.workspaceId, exported.revision);
       return {
         canceled: false,
         filePath: exported.filePath,
+        files,
+        revision: exported.revision,
       };
     });
 
     ipcMain.handle("workspace:inspect", async (_event, payload: EpubWorkspaceInspectPayload) => {
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
-      const includeAce = payload?.includeAce ?? true;
+      const requestedAce = payload?.includeAce ?? true;
+      let includeAce = requestedAce;
+      let aceUnavailableReason: string | undefined;
       if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
-        try {
-          this.launcherRuntime = await LauncherRuntime.ensureChromium((message) =>
-            console.log(`[LauncherRuntime] ${message}`),
-          );
-        } catch (err) {
-          console.log("[LauncherRuntime] on-demand Chromium download failed:", err);
-        }
+        includeAce = false;
+        aceUnavailableReason = "Chromium is being prepared in the background";
+        void LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message)).catch((err) => {
+          this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        });
       }
       // Workspace inspection always validates an exported temporary EPUB, not
       // the original source file. Renderer auto-save is flushed before this IPC
@@ -420,7 +473,11 @@ class EpubChecker {
         javaCommand: this.launcherRuntime.javaCommand,
         epubcheckJarPath: this.launcherRuntime.epubcheckJarPath,
       });
-      return await this.workspaceManager.inspect(payload.workspaceId, maker, includeAce);
+      const response = await this.workspaceManager.inspect(payload.workspaceId, maker, includeAce);
+      return {
+        ...response,
+        ...(requestedAce && !includeAce ? { aceUnavailableReason } : {}),
+      };
     });
 
     ipcMain.on("app:notify", (_, { title, body }) => {
@@ -470,6 +527,75 @@ class EpubChecker {
     return this.mainWindow;
   }
 
+  /** Asks the renderer to flush pending autosaves, then actually closes —
+   * bounded by a timeout so a hung/crashed renderer can't make the app
+   * unclosable. */
+  private flushRendererBeforeClose(win: BrowserWindow): void {
+    // Renderer autosave has its own 10-second failure deadline. Give it time
+    // to reject and cancel the close instead of force-closing first.
+    const FLUSH_TIMEOUT_MS = 15000;
+    let finished = false;
+    let initialTimeout: ReturnType<typeof setTimeout> | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let handleFlushComplete: ((event: Electron.IpcMainEvent, payload?: { canClose?: boolean }) => void) | null = null;
+    const handleConfirming = () => {
+      if (initialTimeout) {
+        clearTimeout(initialTimeout);
+        initialTimeout = null;
+      }
+    };
+    const handleFlushStarted = () => {
+      handleConfirming();
+      timeout = setTimeout(finish, FLUSH_TIMEOUT_MS);
+    };
+    const cleanupListeners = () => {
+      ipcMain.removeListener("app:close-confirming", handleConfirming);
+      ipcMain.removeListener("app:flush-started", handleFlushStarted);
+      if (handleFlushComplete) {
+        ipcMain.removeListener("app:flush-complete", handleFlushComplete);
+      }
+    };
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      cleanupListeners();
+      this.closeAfterFlush = true;
+      this.closeFlushInFlight = false;
+      if (!win.isDestroyed()) {
+        win.close();
+      }
+    };
+    // Only guards a renderer that never responds at all. The renderer sends
+    // close-confirming before showing the user dialog, which cancels this
+    // watchdog so deliberation time is unlimited.
+    initialTimeout = setTimeout(finish, 5000);
+    ipcMain.once("app:close-confirming", handleConfirming);
+    ipcMain.once("app:flush-started", handleFlushStarted);
+    handleFlushComplete = (_event, payload?: { canClose?: boolean }) => {
+      cleanupListeners();
+      if (initialTimeout) {
+        clearTimeout(initialTimeout);
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (payload?.canClose === true) {
+        finish();
+      } else {
+        finished = true;
+        this.closeFlushInFlight = false;
+      }
+    };
+    ipcMain.once("app:flush-complete", handleFlushComplete);
+    if (win.webContents.isDestroyed()) {
+      finish();
+      return;
+    }
+    win.webContents.send("app:flush-before-close");
+  }
+
   /** 새 창 열기 시도는 모두 차단하고, http(s) 링크만 시스템 브라우저로 위임 */
   private attachNavigationGuards = (webContents: Electron.WebContents) => {
     webContents.setWindowOpenHandler(({ url }) => {
@@ -501,6 +627,22 @@ class EpubChecker {
     const instance = this;
     const currentArch: string = os.arch();
 
+    // Two instances would share Mother.userDataPath/tempFolder with no
+    // coordination (e.g. concurrent Date.now()-keyed temp/export filenames
+    // could collide). Bounce the second launch to the first instance's window.
+    if (!app.requestSingleInstanceLock()) {
+      app.quit();
+      return;
+    }
+    app.on("second-instance", () => {
+      if (this.mainWindow) {
+        if (this.mainWindow.isMinimized()) {
+          this.mainWindow.restore();
+        }
+        this.mainWindow.focus();
+      }
+    });
+
     app.commandLine.appendSwitch("force-gpu-rasterization");
     app.commandLine.appendSwitch("ignore-gpu-blocklist");
     app.commandLine.appendSwitch("enable-gpu-rasterization");
@@ -529,22 +671,34 @@ class EpubChecker {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
       callback(false);
     });
+    // setPermissionRequestHandler alone only gates the async request path;
+    // the synchronous check-handler (used by some navigator.permissions.query()
+    // style checks) defaults to allow if left unset even though the actual
+    // request would still be denied above — set both for consistency.
+    session.defaultSession.setPermissionCheckHandler(() => false);
 
     this.launcherRuntime = LauncherRuntime.applyToEnvironment();
     // mac doesn't bundle Chromium (Apple notarization rejects Playwright's Chrome for
     // Testing bundle layout) — download it into userData in the background so it's
     // likely ready by the time the user first runs an accessibility check.
-    console.log("[LauncherRuntime] checking Chromium runtime at startup...");
-    LauncherRuntime.ensureChromium((message) => console.log(`[LauncherRuntime] ${message}`))
+    this.reportRuntimeStatus("접근성 검사용 Chromium을 확인하는 중입니다.");
+    LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message))
       .then((runtime) => {
+        this.launcherRuntime = LauncherRuntime.applyToEnvironment();
         const ready = !runtime.missing.includes("chromium");
+        this.reportRuntimeStatus(
+          ready ? "접근성 검사 런타임이 준비되었습니다." : "Chromium 런타임을 준비하지 못했습니다.",
+        );
         console.log(
           ready
             ? `[LauncherRuntime] startup Chromium check OK: ${runtime.chromiumExecutablePath}`
             : `[LauncherRuntime] startup Chromium check incomplete; missing=${runtime.missing.join(", ")}`,
         );
       })
-      .catch((err) => console.error("[LauncherRuntime] background Chromium download failed:", err));
+      .catch((err) => {
+        this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        console.error("[LauncherRuntime] background Chromium download failed:", err);
+      });
 
     this.createWindow();
     this.setAppEvents();

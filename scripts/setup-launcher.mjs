@@ -20,10 +20,11 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
 import { existsSync, mkdirSync, rmSync, cpSync, readdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 
 const HOST_PLATFORM = process.platform;
 const HOST_ARCH = process.arch;
@@ -74,10 +75,6 @@ function targetAdoptiumArch() {
   return TARGET_ARCH === "arm64" ? "aarch64" : "x64";
 }
 
-function targetArchiveExt() {
-  return TARGET_OS === "win32" ? "zip" : "tar.gz";
-}
-
 function javaNameForTarget() {
   return TARGET_OS === "win32" ? "java.exe" : "java";
 }
@@ -101,10 +98,22 @@ function chromiumPrefixForTarget() {
 }
 
 function preferredChromiumDirName(dirNames) {
-  const archSpecific = `${chromiumPrefixForTarget()}-${TARGET_ARCH}`;
-  const exact = dirNames.find((name) => name === archSpecific);
+  // mac ships separate per-arch builds ("chrome-mac-arm64" / "chrome-mac-x64");
+  // win/linux only ever publish one 64-bit build ("chrome-win64" / "chrome-linux64"),
+  // with no arch name in the suffix. Falling straight through to "longest
+  // matching name" when this doesn't match risked silently picking a
+  // mismatched-arch build if Playwright ever ships more than one win/linux
+  // variant, so this only falls back with an explicit warning.
+  const prefix = chromiumPrefixForTarget();
+  const expected = TARGET_OS === "darwin" ? `${prefix}-${TARGET_ARCH}` : `${prefix}64`;
+  const exact = dirNames.find((name) => name === expected);
   if (exact) return exact;
-  return dirNames.filter((name) => name.startsWith(chromiumPrefixForTarget())).sort((a, b) => b.length - a.length)[0];
+  const fallback = dirNames.filter((name) => name.startsWith(prefix)).sort((a, b) => b.length - a.length)[0];
+  console.warn(
+    `[launcher:setup] expected Chromium dir "${expected}" not found (found: ${dirNames.join(", ")}); ` +
+      `falling back to "${fallback}" — this may be the wrong architecture.`,
+  );
+  return fallback;
 }
 
 function firstExisting(candidates) {
@@ -141,6 +150,34 @@ async function fetchToFile(url, dest) {
   const buf = Buffer.from(await res.arrayBuffer());
   await writeFile(dest, buf);
   log("  →", dest, `(${(buf.length / 1024 / 1024).toFixed(1)} MiB)`);
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    headers: { "user-agent": "epub-checker-launcher-setup", accept: "application/json" },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} for ${url}\n${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+async function sha256File(filePath) {
+  const buf = await readFile(filePath);
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+// Verifies a downloaded binary against an independently-published checksum
+// before it gets extracted and bundled into a signed, distributed app — a
+// plain fetch()-and-extract with no integrity check means a compromised
+// upstream redirect or CDN would be silently baked into every future release.
+async function verifySha256(filePath, expectedHex, label) {
+  const actualHex = await sha256File(filePath);
+  if (actualHex.toLowerCase() !== expectedHex.toLowerCase()) {
+    throw new Error(`${label} checksum mismatch: expected ${expectedHex}, got ${actualHex} (${filePath})`);
+  }
+  log(`  checksum OK (sha256 ${actualHex.slice(0, 12)}…): ${label}`);
 }
 
 function extractArchive(archivePath, destDir) {
@@ -207,11 +244,23 @@ async function setupJre() {
   log(`Adoptium Temurin JRE ${JRE_VERSION} for ${PLATFORM}`);
   const osName = targetOsName();
   const arch = targetAdoptiumArch();
-  const ext = targetArchiveExt();
-  const url = `https://api.adoptium.net/v3/binary/latest/${JRE_VERSION}/ga/${osName}/${arch}/jre/hotspot/normal/eclipse?project=jdk`;
 
-  const archive = path.join(TMP, `jre-${PLATFORM}.${ext}`);
-  await fetchToFile(url, archive);
+  // The assets metadata endpoint (unlike the /v3/binary/latest/... direct-redirect
+  // endpoint previously used here) returns a `package.checksum` (sha256) alongside
+  // the download link, so the archive can be verified before extraction instead of
+  // just trusted blind.
+  const assetsUrl = `https://api.adoptium.net/v3/assets/latest/${JRE_VERSION}/hotspot?image_type=jre&vendor=eclipse&os=${osName}&architecture=${arch}`;
+  const assets = await fetchJson(assetsUrl);
+  const pkg = Array.isArray(assets) ? assets[0]?.binary?.package : undefined;
+  if (!pkg?.link || !pkg?.checksum) {
+    throw new Error(`Adoptium asset metadata missing link/checksum for ${PLATFORM} (${assetsUrl})`);
+  }
+
+  const assetName = pkg.name || pkg.link;
+  const archiveExt = /\.tar\.gz$/i.test(assetName) ? ".tar.gz" : path.extname(assetName);
+  const archive = path.join(TMP, `jre-${PLATFORM}${archiveExt}`);
+  await fetchToFile(pkg.link, archive);
+  await verifySha256(archive, pkg.checksum, `Adoptium JRE ${pkg.name ?? path.basename(pkg.link)}`);
 
   const extracted = path.join(TMP, "jre-extracted");
   extractArchive(archive, extracted);
@@ -303,6 +352,12 @@ async function setupEpubCheck() {
 
   const archive = path.join(TMP, `epubcheck-${PLATFORM}.zip`);
   await fetchToFile(zipAsset.browser_download_url, archive);
+  // Unlike the Adoptium JRE download above, W3C's epubcheck GitHub releases
+  // don't publish an independent checksum/signature alongside the zip asset —
+  // there's nothing to verify this download against. Logging the hash at
+  // least leaves an audit trail (compare across CI runs / releases) even
+  // though it can't catch a compromise of the upstream release itself.
+  log(`  sha256: ${await sha256File(archive)}`);
 
   const extracted = path.join(TMP, "epubcheck-extracted");
   extractArchive(archive, extracted);
@@ -319,7 +374,10 @@ async function setupEpubCheck() {
   if (!mainJar) throw new Error("epubcheck 메인 jar 못 찾음");
 
   // lib/ 디렉터리도 같이 (있으면)
-  const libDir = findInTree(extracted, (p, e) => e.isDirectory() && e.name === "lib" && p.endsWith("/lib"));
+  // (`e.name === "lib"`이 이미 정확한 이름 매치라, 경로 접미사로 다시 거를 필요는 없음.
+  // 예전엔 `p.endsWith("/lib")`도 걸었는데 path.join이 Windows에선 "\\lib"로 만들어서
+  // 항상 false가 되어 lib/ 자체를 못 찾는 버그였음.)
+  const libDir = findInTree(extracted, (p, e) => e.isDirectory() && e.name === "lib");
 
   const destDir = path.join(TARGET, "epubcheck");
   if (existsSync(destDir) && FORCE) {

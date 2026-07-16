@@ -851,6 +851,32 @@ class AbstractNode {
     "zoom",
   ];
 
+  // `createDom`'s `text` option ends up in an `insertAdjacentHTML` sink (see below),
+  // but callers routinely pass untrusted dynamic content through it (EPUB-derived
+  // file names, zip entry paths, epubcheck/Ace issue messages). Escaping here first
+  // means that content renders as literal text while the small set of intentional
+  // pseudo-tags (<b%>/<u%>/<s%>/<c%>/<i%>/<r%>/<a%>/<k%>, matched further down against
+  // this escaped form) still expand — since none of those markers or the styles they
+  // produce come from the escaped text itself, only from caller-supplied style options.
+  // Used only for the constructed `style="..."` value in the 8 pseudo-tag
+  // blocks below — those style strings are built from caller-supplied option
+  // objects (bold/under/special/code/italic/reference/anchor/strike) and no
+  // call site in this app currently threads untrusted data through them, but
+  // a `"` in any of those property values would otherwise break out of the
+  // attribute and inject arbitrary markup/attributes into a real HTML sink.
+  private static escapeAttribute = (value: string): string => {
+    return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  };
+
+  private static escapeHtml = (value: string): string => {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
   private static elementCache: WeakMap<Document, Map<string, HTMLElement>> = new WeakMap();
 
   private static cloneCachedElement = (
@@ -1145,17 +1171,30 @@ class AbstractNode {
         dom_clone.textContent !== undefined
       ) {
         if (Array.isArray(domCommandObject.text)) {
-          text = domCommandObject.text.join("<br>");
+          // Joined with "\n" (not a raw "<br>") so the join separator goes through
+          // escapeHtml below like the rest of the content — it still renders as a
+          // line break via the `\n` -> "<br>" pass right before insertAdjacentHTML.
+          text = domCommandObject.text.join("\n");
         } else {
           text = domCommandObject.text;
         }
 
         text = text.replace(/_\{\{_/gi, "(").replace(/_\}\}_/gi, ")");
+        // Only for the insertAdjacentHTML sink below — "textarea" mode
+        // assigns to .textContent instead (see the `mode !== "textarea"`
+        // branch further down), which never interprets entities in the
+        // first place, so escaping here would just corrupt displayed text
+        // (e.g. "&" permanently shown as the literal 5 characters "&amp;").
+        if (mode !== "textarea") {
+          text = AbstractNode.escapeHtml(text);
+        }
 
         if (/\<b\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.bold === undefined || typeof domCommandObject.bold !== "object") {
-            throw new Error("bold option needs");
-          } else {
+          if (
+            domCommandObject.bold !== undefined &&
+            typeof domCommandObject.bold === "object" &&
+            domCommandObject.bold !== null
+          ) {
             boldObject = "";
             if (domCommandObject.bold.display === undefined || domCommandObject.bold.display === null) {
               domCommandObject.bold.display = "inline-block";
@@ -1192,14 +1231,16 @@ class AbstractNode {
                 boldObject += ";";
               }
             }
-            text = text.replace(/\<b\%/gi, '<b style="' + boldObject + '">');
-            text = text.replace(/\%b\>/gi, "</b>");
+            text = text.replace(/&lt;b%/gi, '<b style="' + AbstractNode.escapeAttribute(boldObject) + '">');
+            text = text.replace(/%b&gt;/gi, "</b>");
           }
         }
         if (/\<u\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.under === undefined || typeof domCommandObject.under !== "object") {
-            throw new Error("under option needs");
-          } else {
+          if (
+            domCommandObject.under !== undefined &&
+            typeof domCommandObject.under === "object" &&
+            domCommandObject.under !== null
+          ) {
             underObject = "";
             if (domCommandObject.under.display === undefined || domCommandObject.under.display === null) {
               domCommandObject.under.display = "inline-block";
@@ -1251,14 +1292,16 @@ class AbstractNode {
                 underObject += ";";
               }
             }
-            text = text.replace(/\<u\%/gi, '<b style="' + underObject + '">');
-            text = text.replace(/\%u\>/gi, "</b>");
+            text = text.replace(/&lt;u%/gi, '<b style="' + AbstractNode.escapeAttribute(underObject) + '">');
+            text = text.replace(/%u&gt;/gi, "</b>");
           }
         }
         if (/\<s\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.special === undefined || typeof domCommandObject.special !== "object") {
-            throw new Error("special option needs");
-          } else {
+          if (
+            domCommandObject.special !== undefined &&
+            typeof domCommandObject.special === "object" &&
+            domCommandObject.special !== null
+          ) {
             specialObject = "";
             if (domCommandObject.special.display === undefined || domCommandObject.special.display === null) {
               domCommandObject.special.display = "inline-block";
@@ -1310,14 +1353,16 @@ class AbstractNode {
                 specialObject += ";";
               }
             }
-            text = text.replace(/\<s\%/gi, '<b style="' + specialObject + '">');
-            text = text.replace(/\%s\>/gi, "</b>");
+            text = text.replace(/&lt;s%/gi, '<b style="' + AbstractNode.escapeAttribute(specialObject) + '">');
+            text = text.replace(/%s&gt;/gi, "</b>");
           }
         }
         if (/\<c\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.code === undefined || typeof domCommandObject.code !== "object") {
-            throw new Error("code option needs");
-          } else {
+          if (
+            domCommandObject.code !== undefined &&
+            typeof domCommandObject.code === "object" &&
+            domCommandObject.code !== null
+          ) {
             codeObject = "";
             if (domCommandObject.code.display === undefined || domCommandObject.code.display === null) {
               domCommandObject.code.display = "inline-block";
@@ -1369,8 +1414,8 @@ class AbstractNode {
                 codeObject += ";";
               }
             }
-            text = text.replace(/\<c\%/gi, '<code style="' + codeObject + '">');
-            text = text.replace(/\%c\>/gi, "</code>");
+            text = text.replace(/&lt;c%/gi, '<code style="' + AbstractNode.escapeAttribute(codeObject) + '">');
+            text = text.replace(/%c&gt;/gi, "</code>");
 
             thisCodeRegExp = /\<code [^\>]*\>(((?!\<\/code\>).)*)\<\/code\>/gi;
             codeArr = [];
@@ -1386,9 +1431,11 @@ class AbstractNode {
           }
         }
         if (/\<i\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.italic === undefined || typeof domCommandObject.italic !== "object") {
-            throw new Error("italic option needs");
-          } else {
+          if (
+            domCommandObject.italic !== undefined &&
+            typeof domCommandObject.italic === "object" &&
+            domCommandObject.italic !== null
+          ) {
             italicObject = "";
             if (domCommandObject.italic.display === undefined || domCommandObject.italic.display === null) {
               domCommandObject.italic.display = "inline-block";
@@ -1440,14 +1487,16 @@ class AbstractNode {
                 italicObject += ";";
               }
             }
-            text = text.replace(/\<i\%/gi, '<b style="' + italicObject + '">');
-            text = text.replace(/\%i\>/gi, "</b>");
+            text = text.replace(/&lt;i%/gi, '<b style="' + AbstractNode.escapeAttribute(italicObject) + '">');
+            text = text.replace(/%i&gt;/gi, "</b>");
           }
         }
         if (/\<r\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.reference === undefined || typeof domCommandObject.reference !== "object") {
-            throw new Error("reference option needs");
-          } else {
+          if (
+            domCommandObject.reference !== undefined &&
+            typeof domCommandObject.reference === "object" &&
+            domCommandObject.reference !== null
+          ) {
             referenceObject = "";
             if (domCommandObject.reference.display === undefined || domCommandObject.reference.display === null) {
               domCommandObject.reference.display = "inline-block";
@@ -1499,14 +1548,16 @@ class AbstractNode {
                 referenceObject += ";";
               }
             }
-            text = text.replace(/\<r\%/gi, '<b style="' + referenceObject + '">');
-            text = text.replace(/\%r\>/gi, "</b>");
+            text = text.replace(/&lt;r%/gi, '<b style="' + AbstractNode.escapeAttribute(referenceObject) + '">');
+            text = text.replace(/%r&gt;/gi, "</b>");
           }
         }
         if (/\<a\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.anchor === undefined || typeof domCommandObject.anchor !== "object") {
-            throw new Error("anchor option needs");
-          } else {
+          if (
+            domCommandObject.anchor !== undefined &&
+            typeof domCommandObject.anchor === "object" &&
+            domCommandObject.anchor !== null
+          ) {
             anchorObject = "";
             if (domCommandObject.anchor.display === undefined || domCommandObject.anchor.display === null) {
               domCommandObject.anchor.display = "inline-block";
@@ -1558,14 +1609,16 @@ class AbstractNode {
                 anchorObject += ";";
               }
             }
-            text = text.replace(/\<a\%/gi, '<b style="' + anchorObject + '">');
-            text = text.replace(/\%a\>/gi, "</b>");
+            text = text.replace(/&lt;a%/gi, '<b style="' + AbstractNode.escapeAttribute(anchorObject) + '">');
+            text = text.replace(/%a&gt;/gi, "</b>");
           }
         }
         if (/\<k\%/gi.test(domCommandObject.text as string)) {
-          if (domCommandObject.strike === undefined || typeof domCommandObject.strike !== "object") {
-            throw new Error("strike option needs");
-          } else {
+          if (
+            domCommandObject.strike !== undefined &&
+            typeof domCommandObject.strike === "object" &&
+            domCommandObject.strike !== null
+          ) {
             strikeObject = "";
             if (domCommandObject.strike.display === undefined || domCommandObject.strike.display === null) {
               domCommandObject.strike.display = "inline-block";
@@ -1617,8 +1670,8 @@ class AbstractNode {
                 strikeObject += ";";
               }
             }
-            text = text.replace(/\<k\%/gi, '<b style="' + strikeObject + '">');
-            text = text.replace(/\%k\>/gi, "</b>");
+            text = text.replace(/&lt;k%/gi, '<b style="' + AbstractNode.escapeAttribute(strikeObject) + '">');
+            text = text.replace(/%k&gt;/gi, "</b>");
           }
         }
 

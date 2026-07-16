@@ -15,16 +15,20 @@
     "start": "electron .",
     "dev": "npm run build:all && cross-env NODE_ENV=development electron .",
     "check": "npm run build:all",
+    "test:backend": "tsx test/backend-smoke.ts",
+    "test:renderer-store": "tsx test/workspace-store-smoke.ts",
+    "verify": "npm run format:check && npm run check && npm run test:backend && npm run test:renderer-store",
     "launcher:setup": "node scripts/setup-launcher.mjs",
     "launcher:setup:rebuild": "cross-env FORCE=1 node scripts/setup-launcher.mjs",
     "launcher:setup:mac:x64": "cross-env LAUNCHER_PLATFORM=darwin-x64 node scripts/setup-launcher.mjs",
     "launcher:setup:mac:arm64": "cross-env LAUNCHER_PLATFORM=darwin-arm64 node scripts/setup-launcher.mjs",
     "launcher:setup:win:x64": "cross-env LAUNCHER_PLATFORM=win32-x64 node scripts/setup-launcher.mjs",
-    "format": "prettier --write \"source/**/*.ts\" \"scripts/**/*.mjs\"",
-    "format:check": "prettier --check \"source/**/*.ts\" \"scripts/**/*.mjs\"",
+    "format": "prettier --write \"source/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\"",
+    "format:check": "prettier --check \"source/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.mjs\"",
     "dist": "npm run build:all && electron-builder",
     "dist:mac": "npm run build:all && electron-builder --mac",
     "dist:win": "npm run build:all && electron-builder --win",
+    "dist:win:appx": "npm run build:all && electron-builder --win appx",
     "dist:linux": "npm run build:all && electron-builder --linux"
   },
   "keywords": [
@@ -109,7 +113,7 @@
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis", { "target": "appx", "arch": ["x64", "arm64"] }],
+      "target": ["nsis"],
       "extraResources": [
         { "from": "launcher/win32-${arch}", "to": "launcher/win32-${arch}", "filter": ["**/*"] }
       ]

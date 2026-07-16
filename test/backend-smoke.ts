@@ -10,6 +10,7 @@ import fsPromise from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import JSZip from "jszip";
+import assert from "node:assert/strict";
 import { LauncherRuntime } from "../source/apps/launcherRuntime.js";
 import { EpubMaker } from "../source/apps/epubMaker/epubMaker.js";
 import { EpubWorkspaceManager } from "../source/apps/epubWorkspace.js";
@@ -25,13 +26,18 @@ await fsPromise.mkdir(TEST_DIR, { recursive: true });
 const buildCleanEpub = async (): Promise<JSZip> => {
   const zip = new JSZip();
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
-  zip.file("META-INF/container.xml", `<?xml version="1.0" encoding="UTF-8"?>
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
-</container>`);
-  zip.file("OEBPS/content.opf", `<?xml version="1.0" encoding="UTF-8"?>
+</container>`,
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ko">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="bookid">urn:uuid:550e8400-e29b-41d4-a716-446655440000</dc:identifier>
@@ -48,21 +54,28 @@ const buildCleanEpub = async (): Promise<JSZip> => {
   <spine>
     <itemref idref="ch1"/>
   </spine>
-</package>`);
-  zip.file("OEBPS/nav.xhtml", `<?xml version="1.0" encoding="UTF-8"?>
+</package>`,
+  );
+  zip.file(
+    "OEBPS/nav.xhtml",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="ko">
 <head><title>목차</title></head>
 <body>
   <nav epub:type="toc"><h1>목차</h1><ol><li><a href="Text/chapter1.xhtml">1장 시작</a></li></ol></nav>
 </body>
-</html>`);
-  zip.file("OEBPS/Text/chapter1.xhtml", `<?xml version="1.0" encoding="UTF-8"?>
+</html>`,
+  );
+  zip.file(
+    "OEBPS/Text/chapter1.xhtml",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ko">
 <head><title>1장</title><link rel="stylesheet" href="../styles/main.css"/></head>
 <body><h1>1장 시작</h1><p>안녕하세요. 이것은 깨끗한 테스트 EPUB입니다.</p></body>
-</html>`);
+</html>`,
+  );
   zip.file("OEBPS/styles/main.css", `body { font-family: serif; line-height: 1.6; }`);
   return zip;
 };
@@ -71,13 +84,18 @@ const buildBrokenEpub = async (): Promise<JSZip> => {
   const zip = new JSZip();
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
   // 일부러 META-INF/container.xml 을 비워서 EPUBCheck가 OPF/네비게이션 관련 오류를 잡도록 함
-  zip.file("META-INF/container.xml", `<?xml version="1.0" encoding="UTF-8"?>
+  zip.file(
+    "META-INF/container.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
     <rootfile full-path="OEBPS/missing.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
-</container>`);
-  zip.file("OEBPS/content.opf", `<?xml version="1.0" encoding="UTF-8"?>
+</container>`,
+  );
+  zip.file(
+    "OEBPS/content.opf",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>깨진 도서</dc:title>
@@ -89,10 +107,14 @@ const buildBrokenEpub = async (): Promise<JSZip> => {
   <spine>
     <itemref idref="bad"/>
   </spine>
-</package>`);
-  zip.file("OEBPS/Text/chapter-bad.xhtml", `<?xml version="1.0" encoding="UTF-8"?>
+</package>`,
+  );
+  zip.file(
+    "OEBPS/Text/chapter-bad.xhtml",
+    `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<body><p>닫히지 않은 태그입니다</body></html>`);
+<body><p>닫히지 않은 태그입니다</body></html>`,
+  );
   return zip;
 };
 
@@ -106,7 +128,7 @@ const writeZip = async (zip: JSZip, fileName: string): Promise<string> => {
 const fmtError = (e: any): string => {
   const sev = (e.severity ?? "?").toString().padEnd(6);
   const code = String(e.code ?? "-").padEnd(10);
-  return `[${ sev }][${ code }] ${ e.fileName }:${ e.line || "-" } :: ${ e.error }`;
+  return `[${sev}][${code}] ${e.fileName}:${e.line || "-"} :: ${e.error}`;
 };
 
 const cases: TestCase[] = [
@@ -149,19 +171,17 @@ const main = async (): Promise<void> => {
   for (const c of cases) {
     console.log(`──── ${c.name} ────`);
     const target = await writeZip(await c.build(), c.name);
-    console.log(`  size : ${ (await fsPromise.stat(target)).size } bytes`);
-    try {
-      const result = await maker.inspectEpub(target, { includeAce: false, deleteMode: false });
-      console.log(`  status : ${ result.status }`);
-      console.log(`  errors : ${ result.errors.length }개`);
-      for (const e of result.errors.slice(0, 8)) {
-        console.log("   ", fmtError(e));
-      }
-      if (result.errors.length > 8) {
-        console.log(`    ... +${ result.errors.length - 8 }개 더`);
-      }
-    } catch (err) {
-      console.log(`  ✘ 예외:`, (err as Error).message);
+    console.log(`  size : ${(await fsPromise.stat(target)).size} bytes`);
+    const result = await maker.inspectEpub(target, { includeAce: false, deleteMode: false });
+    assert.ok(Array.isArray(result.logs), "inspection logs must be preserved");
+    assert.equal(result.status, c.name === "clean.epub" ? "success" : "error");
+    console.log(`  status : ${result.status}`);
+    console.log(`  errors : ${result.errors.length}개`);
+    for (const e of result.errors.slice(0, 8)) {
+      console.log("   ", fmtError(e));
+    }
+    if (result.errors.length > 8) {
+      console.log(`    ... +${result.errors.length - 8}개 더`);
     }
     console.log("");
   }
@@ -172,11 +192,11 @@ const main = async (): Promise<void> => {
   const wsCleanPath = await writeZip(await buildCleanEpub(), "clean-ws.epub");
   const mgr = new EpubWorkspaceManager();
   const opened = await mgr.open(wsCleanPath);
-  console.log(`  workspaceId : ${ opened.workspaceId }`);
-  console.log(`  sourcePath  : ${ opened.sourcePath }`);
-  console.log(`  files       : ${ opened.files.length }개`);
+  console.log(`  workspaceId : ${opened.workspaceId}`);
+  console.log(`  sourcePath  : ${opened.sourcePath}`);
+  console.log(`  files       : ${opened.files.length}개`);
   for (const f of opened.files) {
-    console.log(`    - [${ f.kind.padEnd(6) }] ${ f.path } (${ f.size } bytes)`);
+    console.log(`    - [${f.kind.padEnd(6)}] ${f.path} (${f.size} bytes)`);
   }
   console.log("");
 
@@ -184,21 +204,18 @@ const main = async (): Promise<void> => {
   const chapter = opened.files.find((f) => f.path.includes("chapter1.xhtml"));
   if (chapter) {
     const before = await mgr.getFile(opened.workspaceId, chapter.path);
-    console.log(`  before (first 60): ${ before.content.slice(0, 60).replace(/\s+/g, " ") }…`);
-    const edited = before.content
-      .replace("안녕하세요", "반갑습니다")
-      .replace("깨끗한", "수정한");
+    console.log(`  before (first 60): ${before.content.slice(0, 60).replace(/\s+/g, " ")}…`);
+    const edited = before.content.replace("안녕하세요", "반갑습니다").replace("깨끗한", "수정한");
     const updated = await mgr.updateFile(opened.workspaceId, chapter.path, edited);
     const dirtied = updated.files.find((f) => f.path === chapter.path);
-    console.log(`  updated dirty    : ${ dirtied?.dirty }`);
-    console.log(`  updated path     : ${ dirtied?.path }`);
+    console.log(`  updated dirty    : ${dirtied?.dirty}`);
+    console.log(`  updated path     : ${dirtied?.path}`);
   }
   console.log("");
 
   console.log("  --- 워크스페이스 inspect (modify된 EPUB으로 export 후 검사) ---");
   const insp = await mgr.inspect(opened.workspaceId, maker, false);
-  console.log(`  exportPath : ${ insp.exportPath }`);
-  console.log(`  result.errors : ${ insp.result.errors.length }개`);
+  console.log(`  result.errors : ${insp.result.errors.length}개`);
   for (const e of insp.result.errors.slice(0, 5)) {
     console.log("   ", fmtError(e));
   }
@@ -207,9 +224,46 @@ const main = async (): Promise<void> => {
   console.log("  --- 직접 export (저장 경로 지정) ---");
   const finalOut = path.join(TEST_DIR, "clean-ws-repaired.epub");
   const exported = await mgr.export(opened.workspaceId, finalOut);
+  const cleanFiles = mgr.markExported(opened.workspaceId, exported.revision);
+  assert.equal(
+    cleanFiles.some((file) => file.dirty),
+    false,
+    "successful export must clear dirty markers",
+  );
   const outStat = await fsPromise.stat(exported.filePath);
-  console.log(`  exported filePath : ${ exported.filePath }`);
-  console.log(`  exported size     : ${ outStat.size } bytes`);
+  console.log(`  exported filePath : ${exported.filePath}`);
+  console.log(`  exported size     : ${outStat.size} bytes`);
+  const reinspection = await maker.inspectEpub(exported.filePath, { includeAce: false, deleteMode: false });
+  assert.equal(reinspection.status, "success", "the final exported EPUB must pass re-inspection");
+  console.log("  exported re-inspect: success");
+  console.log("");
+
+  if (chapter) {
+    await mgr.updateFile(opened.workspaceId, chapter.path, "new edit after export started");
+    const staleExportFiles = mgr.markExported(opened.workspaceId, exported.revision);
+    assert.equal(
+      staleExportFiles.some((file) => file.dirty),
+      true,
+      "an older export revision must not clear newer edits",
+    );
+  }
+
+  console.log("▶ EPUBCheck warning 보존");
+  const warningItems = maker.parseEpubCheckJson(
+    JSON.stringify({
+      messages: [
+        {
+          severity: "WARNING",
+          ID: "TEST-001",
+          message: "warning fixture",
+          locations: [{ path: "OEBPS/Text/chapter1.xhtml", line: 3, column: 2 }],
+        },
+      ],
+    }),
+  );
+  assert.equal(warningItems.length, 1);
+  assert.equal(warningItems[0].severity, "warning");
+  console.log("  warning 구조화 결과 보존 ✓");
   console.log("");
 
   console.log("===========================================");

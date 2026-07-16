@@ -17,12 +17,15 @@ interface EpubCheckerElectronApi {
   maximize: () => void;
   close: () => void;
   isMaximized: () => Promise<boolean>;
+  onBeforeClose: (callback: (startFlush: () => void) => Promise<boolean> | boolean) => void;
+  onEpubRuntimeStatus: (callback: (message: string) => void) => () => void;
   getPathForFile: (file: File) => string;
   selectEpubFile: () => Promise<EpubSelectFileResult>;
   openEpubWorkspace: (filePath: string) => Promise<EpubWorkspaceOpenResult>;
+  closeEpubWorkspace: (workspaceId: string) => Promise<{ closed: boolean }>;
   getEpubWorkspaceFile: (workspaceId: string, filePath: string) => Promise<EpubWorkspaceFileContent>;
   updateEpubWorkspaceFile: (workspaceId: string, filePath: string, content: string) => Promise<EpubWorkspaceOpenResult>;
-  exportEpubWorkspace: (workspaceId: string, outputPath?: string) => Promise<EpubWorkspaceExportResult>;
+  exportEpubWorkspace: (workspaceId: string) => Promise<EpubWorkspaceExportResult>;
   exportEpubWorkspaceAs: (workspaceId: string, defaultName?: string) => Promise<EpubWorkspaceExportAsResult>;
   inspectEpubWorkspace: (
     workspaceId: string,
@@ -63,6 +66,14 @@ class ElectronBridge {
     return await this.api.isMaximized();
   };
 
+  public registerBeforeCloseFlush = (callback: (startFlush: () => void) => Promise<boolean> | boolean): void => {
+    this.api.onBeforeClose(callback);
+  };
+
+  public registerRuntimeStatus = (callback: (message: string) => void): (() => void) => {
+    return this.api.onEpubRuntimeStatus(callback);
+  };
+
   public getPathForFile = (file: File): string => {
     return this.api.getPathForFile(file);
   };
@@ -77,6 +88,10 @@ class ElectronBridge {
 
   public getFile = async (workspaceId: string, filePath: string): Promise<EpubWorkspaceFileContent> => {
     return await this.api.getEpubWorkspaceFile(workspaceId, filePath);
+  };
+
+  public closeWorkspace = async (workspaceId: string): Promise<{ closed: boolean }> => {
+    return await this.api.closeEpubWorkspace(workspaceId);
   };
 
   public updateFile = async (

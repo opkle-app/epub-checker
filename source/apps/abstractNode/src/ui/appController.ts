@@ -50,6 +50,8 @@ class AppController {
     editorSlot?.appendChild(this.editor.root);
     this.store.subscribe((state) => this.render(state));
     this.registerGlobalDropZone();
+    this.bridge.registerBeforeCloseFlush((startFlush) => this.store.prepareForAppClose(startFlush));
+    this.bridge.registerRuntimeStatus((message) => this.store.setRuntimeStatus(message));
   };
 
   // Lets a .epub be dropped anywhere in the window, not just on .drop-zone.
@@ -338,8 +340,10 @@ class AppController {
     if (this.logPanel) {
       this.logPanel.textContent = [
         state.message,
+        appState.runtimeMessage,
         state.sourcePath ? `source: ${state.sourcePath}` : "",
         state.exportPath ? `export: ${state.exportPath}` : "",
+        state.logs.length > 0 ? `\n${state.logs.join("\n")}` : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -377,7 +381,7 @@ class AppController {
 
   private createWorkspaceTab = (tab: EpubWorkspaceState, activeWorkspaceId: string): HTMLElement => {
     // One tab = one open EPUB workspace. Closing a tab removes it from renderer
-    // state; backend session cleanup can be added later.
+    // state; WorkspaceStore also releases the matching backend session.
     const issueCount = tab.issues.length;
     const dirtyCount = tab.files.filter((file) => file.dirty).length;
     return createDom({
