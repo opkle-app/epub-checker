@@ -109,10 +109,18 @@
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"],
+      "target": ["nsis", { "target": "appx", "arch": ["x64", "arm64"] }],
       "extraResources": [
         { "from": "launcher/win32-${arch}", "to": "launcher/win32-${arch}", "filter": ["**/*"] }
       ]
+    },
+    "appx": {
+      "applicationId": "EpubChecker",
+      "backgroundColor": "#0B0B0C",
+      "displayName": "EpubChecker",
+      "identityName": "REPLACE_WITH_PARTNER_CENTER_IDENTITY_NAME",
+      "publisher": "REPLACE_WITH_PARTNER_CENTER_PUBLISHER_CN",
+      "publisherDisplayName": "Opkle"
     },
     "linux": {
       "icon": "build/icon.png",
