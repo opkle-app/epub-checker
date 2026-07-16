@@ -9,4 +9,4 @@ if (!root) {
 }
 
 const app = new AppController(root);
-app.launch();
+void app.launch().catch((error) => console.error("Failed to launch EpubChecker:", error));

@@ -27,6 +27,8 @@ export interface EpubInspectError {
   lineNumber?: number;
   column?: number;
   rawMessage?: string;
+  suggestion?: string;
+  additionalLocations?: number;
   filePath?: string;
   source?: "epubcheck" | "ace";
 }
@@ -84,6 +86,17 @@ export interface EpubWorkspaceExportAsResult {
   revision?: number;
 }
 
+export interface EpubRuntimeStatus {
+  code:
+    | "chromium-checking"
+    | "chromium-preparing"
+    | "chromium-downloading"
+    | "chromium-ready"
+    | "chromium-unavailable"
+    | "chromium-download-failed";
+  detail?: string;
+}
+
 contextBridge.exposeInMainWorld("electronAPI", {
   // Window controls are needed because the app uses a frameless custom top bar.
   minimize: () => ipcRenderer.send("window:minimize"),
@@ -118,8 +131,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // EPUB runtime and workspace calls stay on the main process side.
   // The renderer only receives paths, structured metadata, and editable text.
   getEpubRuntimeInfo: (): Promise<LauncherRuntimeInfo> => ipcRenderer.invoke("epub:runtime-info"),
-  onEpubRuntimeStatus: (callback: (message: string) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message);
+  getPreferredSystemLanguages: (): Promise<string[]> => ipcRenderer.invoke("app:preferred-system-languages"),
+  setAppLocale: (locale: "ko" | "en"): void => ipcRenderer.send("app:set-locale", locale),
+  onEpubRuntimeStatus: (callback: (status: EpubRuntimeStatus) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: EpubRuntimeStatus) => callback(status);
     ipcRenderer.on("epub:runtime-status", listener);
     return () => ipcRenderer.removeListener("epub:runtime-status", listener);
   },

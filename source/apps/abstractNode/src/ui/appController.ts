@@ -4,6 +4,9 @@ import { IssueMapper } from "../core/issueMapper.js";
 import { WorkspaceStore } from "../core/workspaceStore.js";
 import type { EpubAppState, EpubInspectError, EpubWorkspaceFile, EpubWorkspaceState } from "../core/types.js";
 import { EditorPane } from "../editor/editorPane.js";
+import { LocaleController, translateMessage } from "../i18n/i18n.js";
+import type { AppLocale } from "../i18n/i18n.js";
+import { localizeIssue } from "../i18n/issueLocalizer.js";
 
 // Renderer UI is intentionally built with AbstractNode static helpers instead of React/Vue.
 // Keep this style when adding panels: const { createDom } = AbstractNode; createDom({...}).
@@ -13,7 +16,8 @@ class AppController {
   // AppController owns layout and rendering only. Data transitions belong in WorkspaceStore,
   // and Electron IPC calls must stay behind ElectronBridge.
   private bridge: ElectronBridge = new ElectronBridge();
-  private store: WorkspaceStore = new WorkspaceStore(this.bridge);
+  private i18n: LocaleController = new LocaleController();
+  private store: WorkspaceStore = new WorkspaceStore(this.bridge, () => this.i18n.messages);
   private root: HTMLElement;
   private fileList: HTMLElement | null = null;
   private issueList: HTMLElement | null = null;
@@ -33,8 +37,26 @@ class AppController {
   // with data-role attributes, mounts the CodeMirror editor into its slot,
   // and subscribes render() to the store so every state change repaints the
   // active workspace.
-  public launch = (): void => {
+  public launch = async (): Promise<void> => {
+    let preferredLanguages: string[] = [];
+    try {
+      preferredLanguages = await this.bridge.getPreferredSystemLanguages();
+    } catch (error) {
+      console.warn("Failed to read preferred system languages; using Chromium preferences.", error);
+      preferredLanguages = Array.from(navigator.languages ?? []);
+    }
+    this.i18n.initialize(preferredLanguages);
+    document.documentElement.lang = this.i18n.current;
+    this.bridge.setAppLocale(this.i18n.current);
     this.injectStyle();
+    this.mountUi();
+    this.store.subscribe((state) => this.render(state));
+    this.registerGlobalDropZone();
+    this.bridge.registerBeforeCloseFlush((startFlush) => this.store.prepareForAppClose(startFlush));
+    this.bridge.registerRuntimeStatus((message) => this.store.setRuntimeStatus(message));
+  };
+
+  private mountUi = (): void => {
     this.root.innerHTML = "";
     this.root.appendChild(this.createShell());
     this.root.appendChild(this.createInspectingOverlay());
@@ -48,10 +70,16 @@ class AppController {
     this.inspectButton = this.root.querySelector("[data-role='inspect-button']");
     const editorSlot = this.root.querySelector("[data-role='editor-slot']");
     editorSlot?.appendChild(this.editor.root);
-    this.store.subscribe((state) => this.render(state));
-    this.registerGlobalDropZone();
-    this.bridge.registerBeforeCloseFlush((startFlush) => this.store.prepareForAppClose(startFlush));
-    this.bridge.registerRuntimeStatus((message) => this.store.setRuntimeStatus(message));
+  };
+
+  private setLocale = (locale: AppLocale): void => {
+    if (!this.i18n.setLocale(locale)) {
+      return;
+    }
+    document.documentElement.lang = locale;
+    this.bridge.setAppLocale(locale);
+    this.mountUi();
+    this.render(this.store.state);
   };
 
   // Lets a .epub be dropped anywhere in the window, not just on .drop-zone.
@@ -71,6 +99,7 @@ class AppController {
   };
 
   private createShell = (): HTMLElement => {
+    const messages = this.i18n.messages;
     return createDom({
       mode: "div",
       class: ["app-shell"],
@@ -85,10 +114,35 @@ class AppController {
             { mode: "img", class: ["title-logo"], attribute: { src: "./static/logo_checker.png", alt: "" } },
             { mode: "div", class: ["title-spacer"] },
             {
+              mode: "div",
+              class: ["locale-switch"],
+              attribute: { role: "group", "aria-label": "Language" },
+              children: [
+                {
+                  mode: "button",
+                  class: ["locale-button", this.i18n.current === "ko" ? "active" : ""].filter(Boolean),
+                  text: "KO",
+                  attribute: { type: "button", title: messages.switchToKorean, "aria-label": messages.switchToKorean },
+                  event: { click: () => this.setLocale("ko") },
+                },
+                {
+                  mode: "button",
+                  class: ["locale-button", this.i18n.current === "en" ? "active" : ""].filter(Boolean),
+                  text: "EN",
+                  attribute: {
+                    type: "button",
+                    title: messages.switchToEnglish,
+                    "aria-label": messages.switchToEnglish,
+                  },
+                  event: { click: () => this.setLocale("en") },
+                },
+              ],
+            },
+            {
               mode: "button",
               class: ["window-button"],
               text: "×",
-              attribute: { type: "button", title: "Close" },
+              attribute: { type: "button", title: messages.closeWindow, "aria-label": messages.closeWindow },
               event: {
                 dblclick: (event: MouseEvent) => event.stopPropagation(),
                 click: () => this.bridge.closeWindow(),
@@ -113,8 +167,8 @@ class AppController {
                   },
                   children: [
                     { mode: "img", class: ["drop-icon"], attribute: { src: "./static/target/import.png", alt: "" } },
-                    { mode: "strong", text: "EPUB 열기" },
-                    { mode: "span", text: ".epub 파일을 드롭" },
+                    { mode: "strong", text: messages.openEpub },
+                    { mode: "span", text: messages.dropEpub },
                   ],
                 },
                 {
@@ -126,18 +180,18 @@ class AppController {
                       class: ["primary-button"],
                       attribute: { type: "button", "data-role": "inspect-button" },
                       event: { click: () => this.store.inspect() },
-                      children: [{ mode: "span", text: "검사" }],
+                      children: [{ mode: "span", text: messages.inspect }],
                     },
                     {
                       mode: "button",
                       class: ["ghost-button", "export-button"],
                       attribute: { type: "button" },
                       event: { click: () => this.store.export() },
-                      children: [{ mode: "span", text: "추출하기" }],
+                      children: [{ mode: "span", text: messages.exportEpub }],
                     },
                   ],
                 },
-                { mode: "div", class: ["nav-label"], text: "> Workspace" },
+                { mode: "div", class: ["nav-label"], text: messages.workspaceLabel },
                 {
                   mode: "nav",
                   class: ["workspace-tabs"],
@@ -147,9 +201,9 @@ class AppController {
                   mode: "div",
                   class: ["status-pill"],
                   attribute: { "data-role": "status" },
-                  text: "대기",
+                  text: messages.idle,
                 },
-                { mode: "div", class: ["nav-label"], text: "> Internal files" },
+                { mode: "div", class: ["nav-label"], text: messages.internalFilesLabel },
                 { mode: "div", class: ["file-list"], attribute: { "data-role": "file-list" } },
               ],
             },
@@ -178,15 +232,15 @@ class AppController {
                   mode: "div",
                   class: ["side-tab-stack"],
                   children: [
-                    { mode: "div", class: ["side-tab", "active"], text: "검사" },
-                    { mode: "div", class: ["side-tab"], text: "로그" },
+                    { mode: "div", class: ["side-tab", "active"], text: messages.inspectionTab },
+                    { mode: "div", class: ["side-tab"], text: messages.logTab },
                   ],
                 },
                 {
                   mode: "div",
                   class: ["issue-panel-card"],
                   children: [
-                    { mode: "h2", text: "검사 항목" },
+                    { mode: "h2", text: messages.inspectionItems },
                     {
                       mode: "div",
                       class: ["issue-list-scroll"],
@@ -243,7 +297,7 @@ class AppController {
           class: ["inspecting-card"],
           children: [
             { mode: "div", class: ["inspecting-spinner"], attribute: { "data-role": "loading-icon" } },
-            { mode: "div", class: ["inspecting-text"], text: "EPUB 검사 중" },
+            { mode: "div", class: ["inspecting-text"], text: this.i18n.messages.inspectingEpub },
           ],
         },
       ],
@@ -318,16 +372,22 @@ class AppController {
     // Render always uses the active workspace. Non-active EPUB tabs keep their own
     // state in WorkspaceStore and are restored when the user switches tabs.
     const state = appState.activeWorkspace;
+    const messages = this.i18n.messages;
+    const localizedIssues = state.issues.map((issue) => localizeIssue(issue, this.i18n.current));
+    this.editor.setUiMessages({
+      noFileSelected: messages.editorNoFileSelected,
+      noDocumentIssues: messages.editorNoDocumentIssues,
+    });
     this.renderTabs(appState);
     if (this.statusLabel) {
-      this.statusLabel.textContent = `${state.stage} · ${state.fileName || "no epub"}`;
+      this.statusLabel.textContent = `${messages.stageLabel(state.stage)} · ${state.fileName || messages.noEpub}`;
     }
     if (this.inspectButton) {
       const label = this.inspectButton.querySelector("span");
       if (label) {
-        label.textContent = appState.tabs.length > 0 ? "재검사" : "검사";
+        label.textContent = appState.tabs.length > 0 ? messages.reinspect : messages.inspect;
       } else {
-        this.inspectButton.textContent = appState.tabs.length > 0 ? "재검사" : "검사";
+        this.inspectButton.textContent = appState.tabs.length > 0 ? messages.reinspect : messages.inspect;
       }
     }
     if (this.inspectingOverlay) {
@@ -339,8 +399,8 @@ class AppController {
     }
     if (this.logPanel) {
       this.logPanel.textContent = [
-        state.message,
-        appState.runtimeMessage,
+        translateMessage(messages, state.message),
+        translateMessage(messages, appState.runtimeMessage),
         state.sourcePath ? `source: ${state.sourcePath}` : "",
         state.exportPath ? `export: ${state.exportPath}` : "",
         state.logs.length > 0 ? `\n${state.logs.join("\n")}` : "",
@@ -349,8 +409,8 @@ class AppController {
         .join("\n");
     }
     this.renderFiles(state);
-    this.renderIssues(state);
-    const activeIssues = state.issues.filter((issue) => {
+    this.renderIssues(localizedIssues, state.files);
+    const activeIssues = localizedIssues.filter((issue) => {
       const target = IssueMapper.resolveIssueTarget(issue, state.files);
       return target?.filePath === state.activeFilePath;
     });
@@ -368,7 +428,7 @@ class AppController {
         createDom({
           mode: "div",
           class: ["empty-tab"],
-          text: "열린 EPUB 없음",
+          text: this.i18n.messages.noOpenEpub,
         }),
       );
       return;
@@ -394,7 +454,7 @@ class AppController {
         {
           mode: "span",
           class: ["workspace-tab-meta"],
-          text: `${tab.stage} · ${issueCount} issues${dirtyCount > 0 ? ` · ${dirtyCount} edits` : ""}`,
+          text: this.i18n.messages.workspaceMeta({ stage: tab.stage, issueCount, dirtyCount }),
         },
         {
           mode: "span",
@@ -448,24 +508,24 @@ class AppController {
     return "./static/target/html.png";
   };
 
-  private renderIssues = (state: EpubWorkspaceState): void => {
+  private renderIssues = (issues: EpubInspectError[], files: EpubWorkspaceFile[]): void => {
     if (!this.issueList) {
       return;
     }
     this.issueList.innerHTML = "";
-    if (state.issues.length === 0) {
+    if (issues.length === 0) {
       this.issueList.appendChild(
         createDom({
           mode: "div",
           class: ["empty-box"],
-          text: "검사 결과가 아직 없습니다.",
+          text: this.i18n.messages.noInspectionResults,
         }),
       );
       return;
     }
 
-    for (const issue of state.issues) {
-      this.issueList.appendChild(this.createIssueButton(issue, state.files));
+    for (const issue of issues) {
+      this.issueList.appendChild(this.createIssueButton(issue, files));
     }
   };
 
@@ -707,7 +767,7 @@ class AppController {
       .title-bar {
         -webkit-app-region: drag;
         display: grid;
-        grid-template-columns: 14.5px minmax(0, 1fr) 16px;
+        grid-template-columns: 14.5px minmax(0, 1fr) auto 16px;
         align-items: center;
         height: 31px;
         padding: 0 14px;
@@ -728,6 +788,41 @@ class AppController {
 
       .title-spacer {
         min-width: 0;
+      }
+
+      .locale-switch {
+        -webkit-app-region: no-drag;
+        display: inline-flex;
+        align-items: center;
+        gap: 1px;
+        margin-right: 10px;
+        padding: 1px;
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.42);
+      }
+
+      .locale-button {
+        min-width: 28px;
+        height: 20px;
+        padding: 0 5px;
+        border-radius: 3px;
+        background: transparent;
+        color: var(--muted);
+        font-family: "RedditMono", "SFMono-Regular", Consolas, monospace;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .locale-button:hover {
+        color: var(--text-strong);
+        background: rgba(255, 255, 255, 0.65);
+      }
+
+      .locale-button.active {
+        color: #ffffff;
+        background: var(--accent-deep);
       }
 
       .window-button {

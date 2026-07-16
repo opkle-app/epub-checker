@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import { WorkspaceStore } from "../source/apps/abstractNode/src/core/workspaceStore.js";
+import { translateMessage } from "../source/apps/abstractNode/src/i18n/i18n.js";
+import { en } from "../source/apps/abstractNode/src/i18n/locales/en.js";
+import { ko } from "../source/apps/abstractNode/src/i18n/locales/ko.js";
 
 let confirmResult = true;
+let lastConfirmMessage = "";
 (globalThis as any).window = {
   setTimeout,
   clearTimeout,
-  confirm: () => confirmResult,
+  confirm: (message: string) => {
+    lastConfirmMessage = message;
+    return confirmResult;
+  },
   alert: () => undefined,
 };
 (globalThis as any).requestAnimationFrame = (callback: FrameRequestCallback) => setTimeout(callback, 0);
@@ -62,6 +69,16 @@ confirmResult = false;
 await store.closeTab(workspace.workspaceId);
 assert.equal(closeCalls, 0, "declining the dirty warning must keep the backend workspace open");
 assert.equal(store.state.tabs.length, 1, "declining the dirty warning must keep the renderer tab open");
+assert.match(lastConfirmMessage, /내보내지 않은 수정 사항/);
+
+const englishStore = new WorkspaceStore(bridge, () => en);
+englishStore.state = { ...store.state };
+await englishStore.closeTab(workspace.workspaceId);
+assert.match(lastConfirmMessage, /has changes that have not been exported/);
+englishStore.setRuntimeStatus({ code: "chromium-downloading" });
+assert.match(translateMessage(en, englishStore.state.runtimeMessage), /Downloading the local Chromium runtime/);
+englishStore.setRuntimeStatus({ code: "chromium-download-failed", detail: "network unavailable" });
+assert.match(translateMessage(en, englishStore.state.runtimeMessage), /network unavailable/);
 
 let flushStarted = false;
 assert.equal(await store.prepareForAppClose(() => (flushStarted = true)), false);
@@ -81,7 +98,10 @@ staleStore.state = {
   runtimeMessage: "ready",
 };
 const inspectionPromise = (staleStore as any).inspectWorkspace(staleWorkspace.workspaceId);
-await new Promise((resolve) => setTimeout(resolve, 5));
+for (let attempt = 0; attempt < 100 && typeof resolveInspection !== "function"; attempt++) {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+}
+assert.equal(typeof resolveInspection, "function", "inspection IPC mock must be ready before resolving it");
 const changedWorkspace = { ...staleWorkspace, revision: staleWorkspace.revision + 1 };
 staleStore.state = {
   ...staleStore.state,
@@ -91,6 +111,6 @@ staleStore.state = {
 resolveInspection({ result: { status: "success", errors: [], logs: [] }, revision: staleWorkspace.revision });
 await inspectionPromise;
 assert.equal(staleStore.state.activeWorkspace.stage, "ready");
-assert.match(staleStore.state.activeWorkspace.message, /다시 검사/);
+assert.match(translateMessage(ko, staleStore.state.activeWorkspace.message), /다시 검사/);
 
 console.log("WorkspaceStore autosave, close, and stale-inspection guards ✓");

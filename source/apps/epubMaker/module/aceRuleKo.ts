@@ -21,7 +21,7 @@ const aceRuleKoMap: Record<string, AceRuleKo> = {
   // ── EPUB 메타데이터 / 패키지(OPF) ──
   "epub-lang": {
     label: "OPF 패키지에 문서 언어가 지정되어 있지 않습니다.",
-    fix: 'content.opf 의 <package> 에 xml:lang="ko" 를, <metadata> 에 <dc:language>ko</dc:language> 를 넣으세요.',
+    fix: "content.opf 의 xml:lang 과 dc:language 에 도서의 실제 언어에 맞는 BCP 47 언어 태그(예: ko, en, en-US)를 지정하세요.",
   },
   "epub-title": {
     label: "EPUB 제목(dc:title)이 없습니다.",

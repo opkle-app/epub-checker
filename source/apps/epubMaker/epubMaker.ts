@@ -252,6 +252,8 @@ class EpubMaker {
       lineNumber: validLine,
       column: validCol,
       rawMessage: rawMessage.trim(),
+      suggestion: suggestion.trim(),
+      additionalLocations: Math.max(0, extraCount),
       filePath: String(filePath ?? "").trim(),
       source: "epubcheck",
     };

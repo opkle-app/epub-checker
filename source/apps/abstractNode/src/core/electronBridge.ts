@@ -4,6 +4,7 @@
 // never touches window.electronAPI directly. See docs/RENDERER_GUIDE.md #9.
 import type {
   EpubInspectResult,
+  EpubRuntimeStatus,
   EpubSelectFileResult,
   EpubWorkspaceExportResult,
   EpubWorkspaceExportAsResult,
@@ -18,7 +19,9 @@ interface EpubCheckerElectronApi {
   close: () => void;
   isMaximized: () => Promise<boolean>;
   onBeforeClose: (callback: (startFlush: () => void) => Promise<boolean> | boolean) => void;
-  onEpubRuntimeStatus: (callback: (message: string) => void) => () => void;
+  onEpubRuntimeStatus: (callback: (status: EpubRuntimeStatus) => void) => () => void;
+  getPreferredSystemLanguages: () => Promise<string[]>;
+  setAppLocale: (locale: "ko" | "en") => void;
   getPathForFile: (file: File) => string;
   selectEpubFile: () => Promise<EpubSelectFileResult>;
   openEpubWorkspace: (filePath: string) => Promise<EpubWorkspaceOpenResult>;
@@ -70,8 +73,16 @@ class ElectronBridge {
     this.api.onBeforeClose(callback);
   };
 
-  public registerRuntimeStatus = (callback: (message: string) => void): (() => void) => {
+  public registerRuntimeStatus = (callback: (status: EpubRuntimeStatus) => void): (() => void) => {
     return this.api.onEpubRuntimeStatus(callback);
+  };
+
+  public getPreferredSystemLanguages = async (): Promise<string[]> => {
+    return await this.api.getPreferredSystemLanguages();
+  };
+
+  public setAppLocale = (locale: "ko" | "en"): void => {
+    this.api.setAppLocale(locale);
   };
 
   public getPathForFile = (file: File): string => {

@@ -1,5 +1,8 @@
 import { ElectronBridge } from "./electronBridge.js";
-import type { EpubAppState, EpubWorkspaceState } from "./types.js";
+import type { EpubAppState, EpubRuntimeStatus, EpubWorkspaceState } from "./types.js";
+import { message, translateMessage } from "../i18n/i18n.js";
+import { ko } from "../i18n/locales/ko.js";
+import type { LocalizedMessage, Messages } from "../i18n/types.js";
 
 type WorkspaceListener = (state: EpubAppState) => void;
 
@@ -14,6 +17,7 @@ class WorkspaceStore {
   // It tracks many EPUB workspaces at once and exposes a single active workspace to the UI.
   // Backend session state is keyed by the same workspaceId through Electron IPC.
   private bridge: ElectronBridge;
+  private getMessages: () => Messages;
   private listeners: Set<WorkspaceListener> = new Set();
 
   // Small debounced auto-save state machine, keyed by "workspaceId::filePath":
@@ -33,16 +37,17 @@ class WorkspaceStore {
   private openFileRequestTokens: Map<string, number> = new Map();
   public state: EpubAppState;
 
-  constructor(bridge: ElectronBridge) {
+  constructor(bridge: ElectronBridge, getMessages: () => Messages = () => ko) {
     this.bridge = bridge;
+    this.getMessages = getMessages;
     const emptyWorkspace = this.createEmptyWorkspace();
     this.state = {
       tabs: [],
       activeWorkspaceId: "",
       activeWorkspace: emptyWorkspace,
-      message: "EPUB 파일을 열어 검사를 시작하세요.",
+      message: message("statusInitial"),
       revision: 0,
-      runtimeMessage: "로컬 검사 런타임을 확인하는 중입니다.",
+      runtimeMessage: message("runtimeChecking"),
     };
   }
 
@@ -55,8 +60,16 @@ class WorkspaceStore {
     return () => this.listeners.delete(listener);
   };
 
-  public setRuntimeStatus = (message: string): void => {
-    this.setAppState({ runtimeMessage: message });
+  public setRuntimeStatus = (status: EpubRuntimeStatus): void => {
+    const runtimeMessages = {
+      "chromium-checking": message("runtimeChecking"),
+      "chromium-preparing": message("runtimePreparing"),
+      "chromium-downloading": message("runtimeDownloading"),
+      "chromium-ready": message("runtimeReady"),
+      "chromium-unavailable": message("runtimeUnavailable"),
+      "chromium-download-failed": message("runtimeDownloadFailed", { detail: status.detail ?? "Unknown error" }),
+    } satisfies Record<EpubRuntimeStatus["code"], LocalizedMessage>;
+    this.setAppState({ runtimeMessage: runtimeMessages[status.code] });
   };
 
   private createEmptyWorkspace = (): EpubWorkspaceState => {
@@ -71,7 +84,7 @@ class WorkspaceStore {
       issues: [],
       logs: [],
       exportPath: "",
-      message: "EPUB 파일을 열어 검사를 시작하세요.",
+      message: message("statusInitial"),
     };
   };
 
@@ -171,7 +184,7 @@ class WorkspaceStore {
     if (
       (target.files.some((file) => file.dirty) || this.getAutoSaveKeysForWorkspace(workspaceId).length > 0) &&
       !window.confirm(
-        `“${target.fileName}”의 내보내지 않은 수정 사항이 있습니다. 이 탭을 닫으면 수정 사항이 사라집니다.`,
+        translateMessage(this.getMessages(), message("statusUnsavedTabConfirm", { fileName: target.fileName })),
       )
     ) {
       return;
@@ -189,7 +202,7 @@ class WorkspaceStore {
         console.error("[workspaceStore] failed to flush pending edits before closing tab:", error);
         this.updateWorkspace(workspaceId, {
           stage: "error",
-          message: `자동 저장에 실패하여 탭을 닫지 않았습니다: ${(error as Error).message}`,
+          message: message("statusCloseSaveFailed", { detail: (error as Error).message }),
         });
         return;
       }
@@ -237,7 +250,7 @@ class WorkspaceStore {
   public openByDroppedFile = async (file: File): Promise<void> => {
     const filePath = this.bridge.getPathForFile(file);
     if (filePath === "") {
-      this.setAppState({ message: "드롭된 파일 경로를 읽을 수 없습니다." });
+      this.setAppState({ message: message("statusDroppedPathUnavailable") });
       return;
     }
     await this.openByPath(filePath);
@@ -253,7 +266,7 @@ class WorkspaceStore {
   };
 
   public openByPath = async (filePath: string): Promise<void> => {
-    this.setAppState({ message: "EPUB 압축을 열고 내부 문서를 읽는 중입니다." });
+    this.setAppState({ message: message("statusOpeningArchive") });
     try {
       const workspace = await this.bridge.openWorkspace(filePath);
       const firstFile =
@@ -269,7 +282,7 @@ class WorkspaceStore {
         issues: [],
         logs: [],
         exportPath: "",
-        message: "파일을 열었습니다. 검사하거나 내부 문서를 선택하세요.",
+        message: message("statusOpened"),
         revision: workspace.revision,
       };
       this.upsertWorkspace(nextWorkspace);
@@ -278,7 +291,7 @@ class WorkspaceStore {
       }
       await this.inspectWorkspace(workspace.workspaceId);
     } catch (error) {
-      this.setAppState({ message: (error as Error).message });
+      this.setAppState({ message: message("statusOperationFailed", { detail: (error as Error).message }) });
     }
   };
 
@@ -310,7 +323,7 @@ class WorkspaceStore {
       stage: "editing",
       activeFilePath: file.path,
       activeContent: file.content,
-      message: `${file.path} 편집 중`,
+      message: message("statusEditingFile", { filePath: file.path }),
     });
   };
 
@@ -318,7 +331,7 @@ class WorkspaceStore {
     const active = this.getActiveWorkspace();
     this.updateActiveWorkspace({
       activeContent: content,
-      message: "수정 사항을 자동 저장하는 중입니다.",
+      message: message("statusAutoSaving"),
     });
     if (active.workspaceId !== "" && active.activeFilePath !== "") {
       this.scheduleAutoSave(active.workspaceId, active.activeFilePath, content);
@@ -348,7 +361,7 @@ class WorkspaceStore {
       void this.flushAutoSave(key).catch((error) => {
         this.updateWorkspace(workspaceId, {
           stage: "error",
-          message: `자동 저장 실패: ${(error as Error).message}`,
+          message: message("statusAutoSaveFailed", { detail: (error as Error).message }),
         });
       });
     }, 250);
@@ -369,7 +382,7 @@ class WorkspaceStore {
     this.pendingAutoSaves.delete(key);
     this.autoSaveInFlight.add(key);
     try {
-      await this.saveWorkspaceFile(pending.workspaceId, pending.filePath, pending.content, "작업 공간에 반영됨");
+      await this.saveWorkspaceFile(pending.workspaceId, pending.filePath, pending.content, message("statusSaved"));
     } catch (error) {
       // Preserve the failed content unless a newer edit is already queued.
       // Inspection/export/close can retry it instead of silently validating
@@ -387,7 +400,7 @@ class WorkspaceStore {
           void this.flushAutoSave(key).catch((error) => {
             this.updateWorkspace(pending.workspaceId, {
               stage: "error",
-              message: `자동 저장 실패: ${(error as Error).message}`,
+              message: message("statusAutoSaveFailed", { detail: (error as Error).message }),
             });
           });
         }
@@ -416,7 +429,12 @@ class WorkspaceStore {
     const deadline = Date.now() + WorkspaceStore.AUTO_SAVE_IDLE_TIMEOUT_MS;
     while (this.autoSaveTimers.has(key) || this.pendingAutoSaves.has(key) || this.autoSaveInFlight.has(key)) {
       if (Date.now() > deadline) {
-        throw new Error(`자동 저장이 ${WorkspaceStore.AUTO_SAVE_IDLE_TIMEOUT_MS / 1000}초 내에 끝나지 않았습니다.`);
+        throw new Error(
+          translateMessage(
+            this.getMessages(),
+            message("statusAutoSaveTimeout", { seconds: WorkspaceStore.AUTO_SAVE_IDLE_TIMEOUT_MS / 1000 }),
+          ),
+        );
       }
       await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
     }
@@ -435,7 +453,7 @@ class WorkspaceStore {
     if (
       dirtyTabs.length > 0 &&
       !window.confirm(
-        `${dirtyTabs.length}개의 EPUB에 내보내지 않은 수정 사항이 있습니다. 앱을 종료하면 수정 사항이 사라집니다.`,
+        translateMessage(this.getMessages(), message("statusUnsavedAppConfirm", { count: dirtyTabs.length })),
       )
     ) {
       return false;
@@ -448,7 +466,9 @@ class WorkspaceStore {
       await Promise.all(this.state.tabs.map((tab) => this.flushPendingAutoSaves(tab.workspaceId)));
       return true;
     } catch (error) {
-      window.alert(`자동 저장에 실패하여 앱을 종료하지 않았습니다: ${(error as Error).message}`);
+      window.alert(
+        translateMessage(this.getMessages(), message("statusQuitSaveFailed", { detail: (error as Error).message })),
+      );
       return false;
     }
   };
@@ -474,13 +494,13 @@ class WorkspaceStore {
     workspaceId: string,
     filePath: string,
     content: string,
-    message: string,
+    statusMessage: LocalizedMessage,
   ): Promise<void> => {
     const workspace = await this.bridge.updateFile(workspaceId, filePath, content);
     this.updateWorkspace(workspaceId, {
       files: workspace.files,
       revision: workspace.revision,
-      message,
+      message: statusMessage,
     });
   };
 
@@ -500,7 +520,10 @@ class WorkspaceStore {
       // Without this, a save failing here left the UI stuck on whatever it
       // showed before the click with zero feedback that inspect() never ran
       // (this call has no .catch() at its click-handler call site).
-      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
+      this.updateWorkspace(active.workspaceId, {
+        stage: "error",
+        message: message("statusOperationFailed", { detail: (error as Error).message }),
+      });
       return;
     }
     await this.inspectWorkspace(active.workspaceId);
@@ -525,7 +548,7 @@ class WorkspaceStore {
     }
     this.updateWorkspace(workspaceId, {
       stage: "inspecting",
-      message: "W3C EPUBCheck와 Ace 접근성 검사를 실행 중입니다.",
+      message: message("statusInspecting"),
     });
     await this.waitForInspectionOverlayPaint();
     try {
@@ -537,17 +560,21 @@ class WorkspaceStore {
         issues: response.result.errors,
         logs: response.result.logs,
         message: stale
-          ? "검사 중 내용이 변경되어 결과가 현재 편집본과 일치하지 않습니다. 다시 검사하세요."
+          ? message("statusInspectionStale")
           : response.result.errors.length === 0
             ? response.aceUnavailableReason
-              ? "EPUBCheck 검사는 통과했습니다. Chromium을 준비하지 못해 Ace 검사는 건너뛰었습니다."
-              : "EPUBCheck와 Ace 검사에서 오류가 없습니다. 수정된 EPUB을 내보낼 수 있습니다."
-            : `${response.result.errors.length}개의 검사 항목이 발견되었습니다.${
-                response.aceUnavailableReason ? " Ace 검사는 Chromium을 준비하지 못해 건너뛰었습니다." : ""
-              }`,
+              ? message("statusPassedAceSkipped")
+              : message("statusPassed")
+            : message("statusIssuesFound", {
+                count: response.result.errors.length,
+                aceSkipped: Boolean(response.aceUnavailableReason),
+              }),
       });
     } catch (error) {
-      this.updateWorkspace(workspaceId, { stage: "error", message: (error as Error).message });
+      this.updateWorkspace(workspaceId, {
+        stage: "error",
+        message: message("statusOperationFailed", { detail: (error as Error).message }),
+      });
     }
   };
 
@@ -563,7 +590,10 @@ class WorkspaceStore {
     try {
       await this.flushPendingAutoSaves(active.workspaceId);
     } catch (error) {
-      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
+      this.updateWorkspace(active.workspaceId, {
+        stage: "error",
+        message: message("statusOperationFailed", { detail: (error as Error).message }),
+      });
       return;
     }
     const defaultName = active.fileName.replace(/\.epub$/i, "") + "-repaired.epub";
@@ -583,11 +613,14 @@ class WorkspaceStore {
         files: response.files ?? active.files,
         message:
           response.revision === this.state.tabs.find((tab) => tab.workspaceId === active.workspaceId)?.revision
-            ? `EPUB 생성 완료: ${response.filePath}`
-            : `EPUB 생성 완료: ${response.filePath} (내보내기 중 추가 수정 사항이 생겨 작업 공간은 계속 수정됨 상태입니다.)`,
+            ? message("statusExportComplete", { filePath: response.filePath })
+            : message("statusExportCompleteWithChanges", { filePath: response.filePath }),
       });
     } catch (error) {
-      this.updateWorkspace(active.workspaceId, { stage: "error", message: (error as Error).message });
+      this.updateWorkspace(active.workspaceId, {
+        stage: "error",
+        message: message("statusOperationFailed", { detail: (error as Error).message }),
+      });
     }
   };
 }

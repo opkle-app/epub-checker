@@ -1,3 +1,5 @@
+import type { LocalizedMessage } from "../i18n/types.js";
+
 // Renderer-side mirror of the main-process IPC payload shapes (see
 // source/preload.ts and source/main.ts). The renderer can't import from the
 // main process directly, so these types are kept in sync by hand. If an IPC
@@ -6,6 +8,17 @@
 type InspectionStage = "idle" | "opening" | "ready" | "inspecting" | "editing" | "validated" | "exported" | "error";
 
 type EpubEditableKind = "xhtml" | "html" | "xml" | "css" | "opf" | "ncx" | "txt";
+
+interface EpubRuntimeStatus {
+  code:
+    | "chromium-checking"
+    | "chromium-preparing"
+    | "chromium-downloading"
+    | "chromium-ready"
+    | "chromium-unavailable"
+    | "chromium-download-failed";
+  detail?: string;
+}
 
 interface EpubInspectError {
   fileName: string;
@@ -16,6 +29,8 @@ interface EpubInspectError {
   lineNumber?: number;
   column?: number;
   rawMessage?: string;
+  suggestion?: string;
+  additionalLocations?: number;
   filePath?: string;
   source?: "epubcheck" | "ace";
 }
@@ -93,7 +108,7 @@ interface EpubWorkspaceState {
   issues: EpubInspectError[];
   logs: string[];
   exportPath: string;
-  message: string;
+  message: LocalizedMessage;
   revision: number;
 }
 
@@ -103,12 +118,13 @@ interface EpubAppState {
   tabs: EpubWorkspaceState[];
   activeWorkspaceId: string;
   activeWorkspace: EpubWorkspaceState;
-  message: string;
-  runtimeMessage: string;
+  message: LocalizedMessage;
+  runtimeMessage: LocalizedMessage;
 }
 
 export {
   InspectionStage,
+  EpubRuntimeStatus,
   EpubEditableKind,
   EpubInspectError,
   EpubInspectResult,

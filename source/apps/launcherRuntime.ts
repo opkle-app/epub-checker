@@ -16,6 +16,10 @@ interface LauncherRuntimeInfo {
   missing: string[];
 }
 
+interface ChromiumRuntimeProgress {
+  code: "chromium-downloading" | "chromium-ready";
+}
+
 class LauncherRuntime {
   public static launcherFolderName: string = "launcher";
 
@@ -274,7 +278,9 @@ class LauncherRuntime {
   // `playwright install chromium` into the same destination directory at once.
   private static ensureChromiumInFlight: Promise<LauncherRuntimeInfo> | null = null;
 
-  public static ensureChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
+  public static ensureChromium = async (
+    onProgress?: (status: ChromiumRuntimeProgress) => void,
+  ): Promise<LauncherRuntimeInfo> => {
     const current = LauncherRuntime.resolve();
     if (!current.missing.includes("chromium")) {
       console.log(`[LauncherRuntime] Chromium already available: ${current.chromiumExecutablePath}`);
@@ -303,12 +309,14 @@ class LauncherRuntime {
     return task;
   };
 
-  private static downloadChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
+  private static downloadChromium = async (
+    onProgress?: (status: ChromiumRuntimeProgress) => void,
+  ): Promise<LauncherRuntimeInfo> => {
     const userDataRoot = LauncherRuntime.getUserDataChromiumRoot();
     const downloadCacheDir = path.join(userDataRoot, "_download-cache");
     mkdirSync(downloadCacheDir, { recursive: true });
 
-    onProgress?.("Downloading local Chromium runtime for accessibility checks...");
+    onProgress?.({ code: "chromium-downloading" });
     console.log(`[LauncherRuntime] download cache: ${downloadCacheDir}`);
     try {
       await LauncherRuntime.installPlaywrightChromium(downloadCacheDir);
@@ -356,7 +364,7 @@ class LauncherRuntime {
       rmSync(downloadCacheDir, { recursive: true, force: true });
       console.log(`[LauncherRuntime] Chromium installed to ${destDir}`);
 
-      onProgress?.("Chromium runtime ready.");
+      onProgress?.({ code: "chromium-ready" });
       const resolved = LauncherRuntime.resolve();
       if (resolved.missing.includes("chromium")) {
         throw new Error(
@@ -373,4 +381,4 @@ class LauncherRuntime {
   };
 }
 
-export { LauncherRuntime, LauncherRuntimeInfo };
+export { ChromiumRuntimeProgress, LauncherRuntime, LauncherRuntimeInfo };

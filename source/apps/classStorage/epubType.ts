@@ -9,6 +9,8 @@ interface EpubInspectError {
   lineNumber?: number; // 숫자 줄번호 (없으면 -1) — 정렬/필터용
   column?: number; // 열번호 (없으면 -1)
   rawMessage?: string; // epubcheck/ace 원문 메시지 (로케일 반영)
+  suggestion?: string; // EPUBCheck 원문 제안(있는 경우)
+  additionalLocations?: number; // 같은 메시지가 추가로 발생한 위치 수
   filePath?: string; // EPUB 내부 원본 경로 (예: OEBPS/Text/chapter1.xhtml)
   source?: "epubcheck" | "ace"; // 검사 출처
 }

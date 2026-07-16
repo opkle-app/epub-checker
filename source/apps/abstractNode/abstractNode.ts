@@ -42,7 +42,7 @@ class AbstractNodeBuilder {
   public ensureRendererHtml = async (): Promise<void> => {
     await fsPromise.mkdir(this.rendererFolder, { recursive: true });
     const html = `<!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,shrink-to-fit=no">

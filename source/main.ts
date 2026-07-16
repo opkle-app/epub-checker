@@ -7,7 +7,7 @@ import { existsSync } from "fs";
 import fsPromise from "fs/promises";
 import process from "process";
 import { Mother } from "./apps/mother.js";
-import { LauncherRuntime, LauncherRuntimeInfo } from "./apps/launcherRuntime.js";
+import { ChromiumRuntimeProgress, LauncherRuntime, LauncherRuntimeInfo } from "./apps/launcherRuntime.js";
 import { EpubMaker } from "./apps/epubMaker/epubMaker.js";
 import { EpubWorkspaceManager } from "./apps/epubWorkspace.js";
 import type { EpubInspectResult } from "./apps/classStorage/epubType.js";
@@ -67,6 +67,59 @@ interface EpubWorkspaceInspectPayload {
   includeAce?: boolean;
 }
 
+type AppLocale = "ko" | "en";
+type RuntimeStatusCode =
+  | "chromium-checking"
+  | "chromium-preparing"
+  | "chromium-downloading"
+  | "chromium-ready"
+  | "chromium-unavailable"
+  | "chromium-download-failed";
+
+interface EpubRuntimeStatus {
+  code: RuntimeStatusCode;
+  detail?: string;
+}
+
+const selectSupportedLocale = (preferredLanguages: string[]): AppLocale => {
+  for (const tag of preferredLanguages) {
+    const language = String(tag).trim().toLowerCase().split("-")[0];
+    if (language === "ko" || language === "en") {
+      return language;
+    }
+  }
+  return "en";
+};
+
+const mainMessages: Record<
+  AppLocale,
+  {
+    selectEpub: string;
+    saveEpub: string;
+    filePathRequired: string;
+    onlyEpub: string;
+    fileMissing: string;
+    missingRuntime: (names: string) => string;
+  }
+> = {
+  ko: {
+    selectEpub: "EPUB 파일 선택",
+    saveEpub: "수정된 EPUB 저장",
+    filePathRequired: "EPUB 파일 경로가 필요합니다.",
+    onlyEpub: ".epub 파일만 검사할 수 있습니다.",
+    fileMissing: "EPUB 파일이 존재하지 않습니다.",
+    missingRuntime: (names) => `필수 로컬 런타임을 찾을 수 없습니다: ${names}`,
+  },
+  en: {
+    selectEpub: "Select an EPUB file",
+    saveEpub: "Save the repaired EPUB",
+    filePathRequired: "An EPUB file path is required.",
+    onlyEpub: "Only .epub files can be inspected.",
+    fileMissing: "The EPUB file does not exist.",
+    missingRuntime: (names) => `Required local runtime is missing: ${names}`,
+  },
+};
+
 class EpubChecker {
   private recentNotifications: Set<string> = new Set();
 
@@ -78,6 +131,7 @@ class EpubChecker {
   public iconPath: string;
   public mainWindow: BrowserWindow | null;
   private launcherRuntime: LauncherRuntimeInfo | null = null;
+  private uiLocale: AppLocale = "en";
   private workspaceManager: EpubWorkspaceManager = new EpubWorkspaceManager();
   // Guards the window "close" interception below: closeAfterFlush marks that
   // the flush already ran (let this specific close through); closeFlushInFlight
@@ -86,10 +140,10 @@ class EpubChecker {
   private closeAfterFlush: boolean = false;
   private closeFlushInFlight: boolean = false;
 
-  private reportRuntimeStatus = (message: string): void => {
-    console.log(`[LauncherRuntime] ${message}`);
+  private reportRuntimeStatus = (status: EpubRuntimeStatus | ChromiumRuntimeProgress): void => {
+    console.log(`[LauncherRuntime] ${status.code}${"detail" in status && status.detail ? `: ${status.detail}` : ""}`);
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send("epub:runtime-status", message);
+      this.mainWindow.webContents.send("epub:runtime-status", status);
     }
   };
 
@@ -198,11 +252,9 @@ class EpubChecker {
           }
           instance.mainWindow.webContents.once("did-finish-load", () => {
             const runtime = LauncherRuntime.resolve();
-            instance.reportRuntimeStatus(
-              runtime.missing.includes("chromium")
-                ? "접근성 검사용 Chromium을 백그라운드에서 준비하는 중입니다."
-                : "접근성 검사 런타임이 준비되었습니다.",
-            );
+            instance.reportRuntimeStatus({
+              code: runtime.missing.includes("chromium") ? "chromium-preparing" : "chromium-ready",
+            });
           });
         }
       }, 300);
@@ -298,10 +350,20 @@ class EpubChecker {
       return this.launcherRuntime;
     });
 
+    ipcMain.handle("app:preferred-system-languages", (): string[] => {
+      return app.getPreferredSystemLanguages();
+    });
+
+    ipcMain.on("app:set-locale", (_event, locale: unknown) => {
+      if (locale === "ko" || locale === "en") {
+        this.uiLocale = locale;
+      }
+    });
+
     ipcMain.handle("epub:select-file", async (): Promise<EpubSelectFileResult> => {
       const win = this.assertMainWindow();
       const result = await dialog.showOpenDialog(win, {
-        title: "EPUB 파일 선택",
+        title: mainMessages[this.uiLocale].selectEpub,
         properties: ["openFile"],
         filters: [{ name: "EPUB", extensions: ["epub"] }],
       });
@@ -325,13 +387,13 @@ class EpubChecker {
     ipcMain.handle("epub:inspect-file", async (_event, payload: EpubInspectPayload): Promise<EpubInspectResponse> => {
       const filePath = String(payload?.filePath ?? "").trim();
       if (filePath === "") {
-        throw new Error("EPUB file path is required");
+        throw new Error(mainMessages[this.uiLocale].filePathRequired);
       }
       if (!/\.epub$/i.test(filePath)) {
-        throw new Error("Only .epub files can be inspected");
+        throw new Error(mainMessages[this.uiLocale].onlyEpub);
       }
       if (!existsSync(filePath)) {
-        throw new Error("EPUB file does not exist");
+        throw new Error(mainMessages[this.uiLocale].fileMissing);
       }
 
       this.launcherRuntime = LauncherRuntime.applyToEnvironment();
@@ -343,8 +405,11 @@ class EpubChecker {
       if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
         includeAce = false;
         aceUnavailableReason = "Chromium is being prepared in the background";
-        void LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message)).catch((err) => {
-          this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        void LauncherRuntime.ensureChromium((status) => this.reportRuntimeStatus(status)).catch((err) => {
+          this.reportRuntimeStatus({
+            code: "chromium-download-failed",
+            detail: String((err as Error)?.message ?? err),
+          });
         });
       }
       // EPUBCheck needs Java and the jar. Ace additionally needs Chromium.
@@ -356,7 +421,7 @@ class EpubChecker {
       if (missingRequired.length > 0) {
         throw new Error(
           [
-            `Missing local runtime: ${missingRequired.join(", ")}`,
+            mainMessages[this.uiLocale].missingRuntime(missingRequired.join(", ")),
             `launcherRoot=${this.launcherRuntime.launcherRoot}`,
             `java=${this.launcherRuntime.javaCommand}`,
             `epubcheck=${this.launcherRuntime.epubcheckJarPath}`,
@@ -385,10 +450,10 @@ class EpubChecker {
     ipcMain.handle("workspace:open", async (_event, payload: EpubWorkspaceOpenPayload) => {
       const filePath = String(payload?.filePath ?? "").trim();
       if (filePath === "") {
-        throw new Error("EPUB file path is required");
+        throw new Error(mainMessages[this.uiLocale].filePathRequired);
       }
       if (!existsSync(filePath)) {
-        throw new Error("EPUB file does not exist");
+        throw new Error(mainMessages[this.uiLocale].fileMissing);
       }
       return await this.workspaceManager.open(filePath);
     });
@@ -419,7 +484,7 @@ class EpubChecker {
     ipcMain.handle("workspace:export-as", async (_event, payload: { workspaceId: string; defaultName?: string }) => {
       const win = this.assertMainWindow();
       const result = await dialog.showSaveDialog(win, {
-        title: "수정된 EPUB 저장",
+        title: mainMessages[this.uiLocale].saveEpub,
         defaultPath: payload?.defaultName ?? `repaired-${Date.now()}.epub`,
         filters: [{ name: "EPUB", extensions: ["epub"] }],
       });
@@ -447,8 +512,11 @@ class EpubChecker {
       if (includeAce && this.launcherRuntime.missing.includes("chromium")) {
         includeAce = false;
         aceUnavailableReason = "Chromium is being prepared in the background";
-        void LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message)).catch((err) => {
-          this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        void LauncherRuntime.ensureChromium((status) => this.reportRuntimeStatus(status)).catch((err) => {
+          this.reportRuntimeStatus({
+            code: "chromium-download-failed",
+            detail: String((err as Error)?.message ?? err),
+          });
         });
       }
       // Workspace inspection always validates an exported temporary EPUB, not
@@ -460,7 +528,7 @@ class EpubChecker {
       if (missingRequired.length > 0) {
         throw new Error(
           [
-            `Missing local runtime: ${missingRequired.join(", ")}`,
+            mainMessages[this.uiLocale].missingRuntime(missingRequired.join(", ")),
             `launcherRoot=${this.launcherRuntime.launcherRoot}`,
             `java=${this.launcherRuntime.javaCommand}`,
             `epubcheck=${this.launcherRuntime.epubcheckJarPath}`,
@@ -666,6 +734,7 @@ class EpubChecker {
 
     this.setIconPath();
     await this.mainApp.whenReady();
+    this.uiLocale = selectSupportedLocale(this.mainApp.getPreferredSystemLanguages());
 
     // 로컬 전용 앱: 원격 권한 요청(카메라/마이크/알림 등)은 모두 거부
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
@@ -681,14 +750,12 @@ class EpubChecker {
     // mac doesn't bundle Chromium (Apple notarization rejects Playwright's Chrome for
     // Testing bundle layout) — download it into userData in the background so it's
     // likely ready by the time the user first runs an accessibility check.
-    this.reportRuntimeStatus("접근성 검사용 Chromium을 확인하는 중입니다.");
-    LauncherRuntime.ensureChromium((message) => this.reportRuntimeStatus(message))
+    this.reportRuntimeStatus({ code: "chromium-checking" });
+    LauncherRuntime.ensureChromium((status) => this.reportRuntimeStatus(status))
       .then((runtime) => {
         this.launcherRuntime = LauncherRuntime.applyToEnvironment();
         const ready = !runtime.missing.includes("chromium");
-        this.reportRuntimeStatus(
-          ready ? "접근성 검사 런타임이 준비되었습니다." : "Chromium 런타임을 준비하지 못했습니다.",
-        );
+        this.reportRuntimeStatus({ code: ready ? "chromium-ready" : "chromium-unavailable" });
         console.log(
           ready
             ? `[LauncherRuntime] startup Chromium check OK: ${runtime.chromiumExecutablePath}`
@@ -696,7 +763,10 @@ class EpubChecker {
         );
       })
       .catch((err) => {
-        this.reportRuntimeStatus(`Chromium 다운로드 실패: ${(err as Error)?.message ?? err}`);
+        this.reportRuntimeStatus({
+          code: "chromium-download-failed",
+          detail: String((err as Error)?.message ?? err),
+        });
         console.error("[LauncherRuntime] background Chromium download failed:", err);
       });
 

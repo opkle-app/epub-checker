@@ -36,6 +36,8 @@ import type { EpubInspectError } from "../core/types.js";
 type EditorChangeHandler = (content: string) => void;
 
 class EditorPane {
+  private noFileSelectedMessage: string = "No file selected";
+  private noDocumentIssuesMessage: string = "No inspection issues are linked to this document.";
   /*
    * CodeMirror is wrapped behind this small adapter so the rest of the renderer
    * can think in EPUB terms: active file, validation issues, and focus target.
@@ -841,7 +843,7 @@ class EditorPane {
   // file path actually changes, so re-rendering the same file for auto-save
   // doesn't tear down and rebuild syntax highlighting on every keystroke.
   public setFile = (filePath: string, content: string): void => {
-    this.title.textContent = filePath || "No file selected";
+    this.title.textContent = filePath || this.noFileSelectedMessage;
     if (this.currentFilePath !== filePath) {
       this.currentFilePath = filePath;
       this.view.dispatch({
@@ -867,7 +869,7 @@ class EditorPane {
   public setIssues = (issues: EpubInspectError[]): void => {
     this.issueBar.innerHTML = "";
     if (issues.length === 0) {
-      this.issueBar.textContent = "이 문서에 연결된 검사 항목이 없습니다.";
+      this.issueBar.textContent = this.noDocumentIssuesMessage;
       this.view.dispatch(setDiagnostics(this.view.state, []));
       return;
     }
@@ -888,6 +890,14 @@ class EditorPane {
       fragment.appendChild(chip);
     }
     this.issueBar.appendChild(fragment);
+  };
+
+  public setUiMessages = (messages: { noFileSelected: string; noDocumentIssues: string }): void => {
+    this.noFileSelectedMessage = messages.noFileSelected;
+    this.noDocumentIssuesMessage = messages.noDocumentIssues;
+    if (this.currentFilePath === "") {
+      this.title.textContent = this.noFileSelectedMessage;
+    }
   };
 
   public focusLine = (lineNumber: number): void => {
