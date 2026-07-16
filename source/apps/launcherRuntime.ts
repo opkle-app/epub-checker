@@ -196,6 +196,10 @@ class LauncherRuntime {
   private static installPlaywrightChromium = async (browsersPath: string): Promise<void> => {
     const require = createRequire(import.meta.url);
     const cliPath = require.resolve("playwright/cli.js");
+    console.log(`[LauncherRuntime] playwright install chromium starting (browsersPath=${browsersPath})`);
+    console.log(
+      '[LauncherRuntime] Playwright may print "Downloading Electron binary..." — that is Chromium for Ace, not the Electron app itself.',
+    );
     await new Promise<void>((resolve, reject) => {
       const child = spawn(process.execPath, [cliPath, "install", "chromium"], {
         // process.execPath is the Electron binary in a packaged app; ELECTRON_RUN_AS_NODE
@@ -204,10 +208,20 @@ class LauncherRuntime {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PLAYWRIGHT_BROWSERS_PATH: browsersPath },
         stdio: "inherit",
       });
-      child.on("error", reject);
-      child.on("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`playwright install chromium exited with code ${code}`));
+      child.on("error", (err) => {
+        console.error("[LauncherRuntime] playwright install chromium failed to spawn:", err);
+        reject(err);
+      });
+      child.on("exit", (code, signal) => {
+        if (code === 0) {
+          console.log("[LauncherRuntime] playwright install chromium completed successfully (exit 0)");
+          resolve();
+          return;
+        }
+        const detail = signal ? `signal ${signal}` : `exit code ${code}`;
+        const error = new Error(`playwright install chromium failed (${detail})`);
+        console.error(`[LauncherRuntime] ${error.message}`);
+        reject(error);
       });
     });
   };
@@ -226,16 +240,28 @@ class LauncherRuntime {
   public static ensureChromium = async (onProgress?: (message: string) => void): Promise<LauncherRuntimeInfo> => {
     const current = LauncherRuntime.resolve();
     if (!current.missing.includes("chromium")) {
+      console.log(`[LauncherRuntime] Chromium already available: ${current.chromiumExecutablePath}`);
       return current;
     }
 
     if (LauncherRuntime.ensureChromiumInFlight) {
+      console.log("[LauncherRuntime] Chromium download already in progress; waiting for the same task.");
       return LauncherRuntime.ensureChromiumInFlight;
     }
 
-    const task = LauncherRuntime.downloadChromium(onProgress).finally(() => {
-      LauncherRuntime.ensureChromiumInFlight = null;
-    });
+    console.log("[LauncherRuntime] Chromium missing — starting on-demand download.");
+    const task = LauncherRuntime.downloadChromium(onProgress)
+      .then((runtime) => {
+        console.log(`[LauncherRuntime] Chromium download succeeded: ${runtime.chromiumExecutablePath}`);
+        return runtime;
+      })
+      .catch((err) => {
+        console.error("[LauncherRuntime] Chromium download failed:", err);
+        throw err;
+      })
+      .finally(() => {
+        LauncherRuntime.ensureChromiumInFlight = null;
+      });
     LauncherRuntime.ensureChromiumInFlight = task;
     return task;
   };
@@ -246,7 +272,9 @@ class LauncherRuntime {
     mkdirSync(downloadCacheDir, { recursive: true });
 
     onProgress?.("Downloading local Chromium runtime for accessibility checks...");
+    console.log(`[LauncherRuntime] download cache: ${downloadCacheDir}`);
     await LauncherRuntime.installPlaywrightChromium(downloadCacheDir);
+    console.log("[LauncherRuntime] Playwright download step finished; installing into userData...");
 
     const versionDirs = readdirSync(downloadCacheDir).filter(
       (name) => name.startsWith("chromium-") && !name.includes("headless_shell"),
@@ -255,6 +283,7 @@ class LauncherRuntime {
       throw new Error(`playwright install produced no chromium-* folder under ${downloadCacheDir}`);
     }
     const versionDir = path.join(downloadCacheDir, versionDirs.sort().at(-1) as string);
+    console.log(`[LauncherRuntime] using Playwright version folder: ${versionDir}`);
 
     const platformPrefix =
       process.platform === "darwin" ? "chrome-mac" : process.platform === "win32" ? "chrome-win" : "chrome-linux";
@@ -271,9 +300,16 @@ class LauncherRuntime {
     mkdirSync(destRoot, { recursive: true });
     cpSync(path.join(versionDir, chosen), destDir, { recursive: true });
     rmSync(downloadCacheDir, { recursive: true, force: true });
+    console.log(`[LauncherRuntime] Chromium installed to ${destDir}`);
 
     onProgress?.("Chromium runtime ready.");
-    return LauncherRuntime.resolve();
+    const resolved = LauncherRuntime.resolve();
+    if (resolved.missing.includes("chromium")) {
+      throw new Error(
+        `Chromium was copied to ${destDir} but still does not resolve (looked for ${resolved.chromiumExecutablePath})`,
+      );
+    }
+    return resolved;
   };
 }
 

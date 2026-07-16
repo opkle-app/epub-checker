@@ -534,9 +534,17 @@ class EpubChecker {
     // mac doesn't bundle Chromium (Apple notarization rejects Playwright's Chrome for
     // Testing bundle layout) — download it into userData in the background so it's
     // likely ready by the time the user first runs an accessibility check.
-    LauncherRuntime.ensureChromium((message) => console.log(`[LauncherRuntime] ${message}`)).catch((err) =>
-      console.log("[LauncherRuntime] background Chromium download failed:", err),
-    );
+    console.log("[LauncherRuntime] checking Chromium runtime at startup...");
+    LauncherRuntime.ensureChromium((message) => console.log(`[LauncherRuntime] ${message}`))
+      .then((runtime) => {
+        const ready = !runtime.missing.includes("chromium");
+        console.log(
+          ready
+            ? `[LauncherRuntime] startup Chromium check OK: ${runtime.chromiumExecutablePath}`
+            : `[LauncherRuntime] startup Chromium check incomplete; missing=${runtime.missing.join(", ")}`,
+        );
+      })
+      .catch((err) => console.error("[LauncherRuntime] background Chromium download failed:", err));
 
     this.createWindow();
     this.setAppEvents();

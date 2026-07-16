@@ -38,6 +38,7 @@ class AppController {
     this.root.innerHTML = "";
     this.root.appendChild(this.createShell());
     this.root.appendChild(this.createInspectingOverlay());
+    this.root.appendChild(this.createBrandButton());
     this.fileList = this.root.querySelector("[data-role='file-list']");
     this.issueList = this.root.querySelector("[data-role='issue-list']");
     this.logPanel = this.root.querySelector("[data-role='log-panel']");
@@ -79,7 +80,7 @@ class AppController {
             dblclick: () => this.bridge.toggleMaximizeWindow(),
           },
           children: [
-            { mode: "img", class: ["title-logo"], attribute: { src: "./static/logo_epub.png", alt: "" } },
+            { mode: "img", class: ["title-logo"], attribute: { src: "./static/logo_checker.png", alt: "" } },
             { mode: "div", class: ["title-spacer"] },
             {
               mode: "button",
@@ -195,6 +196,35 @@ class AppController {
               ],
             },
           ],
+        },
+      ],
+    });
+  };
+
+  // Fixed bottom-left brand chip. Stays above the shell layout; click opens
+  // opkle.app in the system browser via main-process navigation guards.
+  private createBrandButton = (): HTMLElement => {
+    return createDom({
+      mode: "button",
+      class: ["opkle-brand-button"],
+      attribute: {
+        type: "button",
+        title: "Opkle",
+        "aria-label": "Open opkle.app",
+      },
+      event: {
+        click: () => {
+          window.open("https://opkle.app", "_blank", "noopener,noreferrer");
+        },
+      },
+      children: [
+        {
+          mode: "img",
+          class: ["opkle-brand-logo"],
+          attribute: {
+            src: "./static/logo_opkle_white.png",
+            alt: "Opkle",
+          },
         },
       ],
     });
@@ -579,6 +609,35 @@ class AppController {
         font-size: 12px;
         line-height: 1.5;
         white-space: pre-wrap;
+      }
+
+      .opkle-brand-button {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        z-index: 500;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 28px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        box-shadow: 0 5px 14px rgba(98, 168, 233, 0.35);
+        cursor: pointer;
+      }
+
+      .opkle-brand-button:hover {
+        background: var(--accent-dark);
+      }
+
+      .opkle-brand-logo {
+        display: block;
+        height: 10px;
+        width: auto;
+        object-fit: contain;
+        pointer-events: none;
       }
 
       /* 검사 진행 중 로딩 오버레이 */
