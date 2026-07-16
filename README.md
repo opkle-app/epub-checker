@@ -2,7 +2,46 @@
 
 EpubChecker는 EPUB 파일을 로컬에서 열고, W3C EPUBCheck와 Ace by DAISY 접근성 검사를 실행하고, EPUB 내부의 XHTML/OPF/CSS/XML 파일을 직접 수정한 뒤, 수정본 EPUB을 다시 만들고 재검사하는 Electron 데스크톱 앱입니다.
 
-The short English version: EpubChecker is a local-first Electron app for validating, inspecting, editing, rebuilding, and re-validating EPUB files without uploading book contents to a server.
+**EpubChecker는 [Opkle](https://opkle.app)이 만들고 배포하는 무료 오픈 소스 소프트웨어입니다.**
+
+The short English version: EpubChecker is a free, open-source, local-first Electron app by [Opkle](https://opkle.app) for validating, inspecting, editing, rebuilding, and re-validating EPUB files without uploading book contents to a server.
+
+## Screenshots
+
+스크린샷을 클릭하면 원본 크기로 확인할 수 있습니다.
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot0.png"><img src="./renderer/static/screenShot0.png" alt="EPUB 내부 파일을 편집하는 EpubChecker 메인 화면"></a><br>
+      <sub>EPUB 내부 파일 탐색 및 CodeMirror 편집</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot1.png"><img src="./renderer/static/screenShot1.png" alt="EPUB 검사를 실행 중인 EpubChecker 화면"></a><br>
+      <sub>EPUBCheck 및 접근성 검사 실행</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot2.png"><img src="./renderer/static/screenShot2.png" alt="여러 EPUB 작업공간과 검사 결과를 표시한 화면"></a><br>
+      <sub>여러 EPUB 작업공간과 구조화된 이슈 목록</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot3.png"><img src="./renderer/static/screenShot3.png" alt="편집기 진단 표시와 검사 이슈 목록 화면"></a><br>
+      <sub>편집기 진단 표시 및 이슈 위치 탐색</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot4.png"><img src="./renderer/static/screenShot4.png" alt="XHTML 오류와 EPUBCheck 및 Ace 검사 결과 화면"></a><br>
+      <sub>EPUBCheck와 Ace by DAISY 결과 통합</sub>
+    </td>
+    <td width="50%" align="center">
+      <a href="./renderer/static/screenShot5.png"><img src="./renderer/static/screenShot5.png" alt="EPUB 표지 XHTML과 CSS를 편집하는 화면"></a><br>
+      <sub>XHTML·CSS 편집과 실시간 문제 확인</sub>
+    </td>
+  </tr>
+</table>
 
 ## Why This Exists
 
@@ -17,6 +56,7 @@ EpubChecker는 이 반복 작업을 하나의 로컬 작업 공간으로 묶는 
 
 ## Current Features
 
+- [Opkle](https://opkle.app)이 무료로 제공하는 Apache-2.0 오픈 소스 소프트웨어
 - Electron 기반 로컬 데스크톱 앱
 - renderer, preload, main process를 분리한 안전한 IPC 구조
 - 드래그 앤 드롭 또는 파일 선택창으로 `.epub` 열기
@@ -286,9 +326,11 @@ npm run start
 
 ## License
 
-Apache License 2.0. 자세한 내용은 [LICENSE](./LICENSE)를 참고하세요.
+EpubChecker는 [Opkle](https://opkle.app)이 무료로 제공하며, Apache License 2.0으로 배포됩니다. 자세한 내용은 [LICENSE](./LICENSE)를 참고하세요.
 
 렌더러에 번들된 폰트는 별도 라이선스를 따릅니다.
 
 - [Pretendard](https://github.com/orioncactus/pretendard) — SIL Open Font License 1.1 ([전체 텍스트](./renderer/designSource/font/pretendard/LICENSE))
 - [Reddit Mono](https://github.com/reddit/redditsans) — SIL Open Font License 1.1 ([전체 텍스트](./renderer/designSource/font/redditmono/LICENSE.txt))
+
+<p align="center">Made by <a href="https://opkle.app">Opkle</a>.</p>
